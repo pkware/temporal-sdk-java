@@ -1,0 +1,10 @@
+# Derived build directory — produced by apply-patches.sh
+build/
+
+# IntelliJ
+.idea/
+*.iml
+out/
+
+# Claude Code
+.claude/
