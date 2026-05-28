@@ -1,0 +1,67 @@
+nexusPublishing {
+    repositories {
+        sonatype {
+            username = System.getenv('NEXUS_USERNAME') ?: ''
+            password = System.getenv('NEXUS_PASSWORD') ?: ''
+            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
+        }
+    }
+}
+
+subprojects {
+    apply plugin: 'maven-publish'
+    apply plugin: 'signing'
+
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                afterEvaluate {
+                    plugins.withId('java-platform') {
+                        from components.javaPlatform
+                    }
+                    plugins.withId('java') {
+                        from components.java
+                    }
+                }
+            }
+        }
+    }
+
+    afterEvaluate { subproject ->
+        subproject.publishing.publications.withType(MavenPublication).each { publication ->
+            publication.pom {
+                name = subproject.description
+                description = subproject.description
+                url = 'https://github.com/pkware/temporal-sdk-java'
+
+                scm {
+                    connection = 'scm:git@github.com:pkware/temporal-sdk-java.git'
+                    developerConnection = 'scm:git@github.com:pkware/temporal-sdk-java.git'
+                    url = 'https://github.com/pkware/temporal-sdk-java.git'
+                }
+
+                licenses {
+                    license {
+                        name = 'The Apache License, Version 2.0'
+                        url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+                    }
+                }
+            }
+        }
+
+        def signingKey = System.getenv('SIGNING_KEY')
+        if (signingKey) {
+            subproject.signing {
+                useInMemoryPgpKeys(
+                    System.getenv('SIGNING_KEY_ID'),
+                    signingKey,
+                    System.getenv('SIGNING_PASSWORD') ?: ''
+                )
+                subproject.publishing.publications.withType(MavenPublication).each { publication ->
+                    sign publication
+                }
+            }
+        }
+    }
+}
