@@ -1,0 +1,33 @@
+From ede8dcc4a58c9d21db70190018a854a9e52fdb93 Mon Sep 17 00:00:00 2001
+From: Marius Volkhart <marius.volkhart@pkware.com>
+Date: Thu, 21 May 2026 14:53:54 -0400
+Subject: [PATCH] Change groupId to com.pkware.temporal
+
+Publish under PKWARE's Maven Central namespace.
+---
+ gradle/versioning.gradle | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/gradle/versioning.gradle b/gradle/versioning.gradle
+index 7cdddff..e950041 100644
+--- a/gradle/versioning.gradle
++++ b/gradle/versioning.gradle
+@@ -51,10 +51,10 @@ ext.getClientVersionName = { ->
+     return split[0]
+ }
+ 
+-group = 'io.temporal'
+-version = getVersionName()
++group = 'com.pkware.temporal'
++version = project.hasProperty('overrideVersion') ? project.property('overrideVersion') : getVersionName()
+ 
+ subprojects {
+-    group = 'io.temporal'
+-    version = getVersionName()
++    group = 'com.pkware.temporal'
++    version = rootProject.version
+ }
+\ No newline at end of file
+-- 
+2.50.1 (Apple Git-155)
+
