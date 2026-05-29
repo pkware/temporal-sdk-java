@@ -1,0 +1,163 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 8,20 * * *'
+  workflow_dispatch:
+    inputs:
+      force_tag:
+        description: 'Force sync to specific tag (e.g., v1.36.0)'
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true # needed for git push later
+
+      - name: Detect latest upstream tag
+        id: detect
+        env:
+          FORCE_TAG: ${{ inputs.force_tag }}
+        run: |
+          git ls-remote --tags https://github.com/temporalio/sdk-java.git \
+            | awk '{print $2}' \
+            | sed 's|refs/tags/||' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V \
+            | tail -1 > /tmp/latest-tag.txt
+
+          LATEST=$(cat /tmp/latest-tag.txt)
+          CURRENT=$(cat .upstream-version)
+
+          if [ -n "$FORCE_TAG" ]; then
+            echo "tag=$FORCE_TAG" >> "$GITHUB_OUTPUT"
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+          elif [ "$LATEST" != "$CURRENT" ]; then
+            echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream: $LATEST, Current: $CURRENT"
+
+      - name: Apply patches
+        if: steps.detect.outputs.should_sync == 'true'
+        id: patch
+        env:
+          TARGET_TAG: ${{ steps.detect.outputs.tag }}
+        run: ./scripts/apply-patches.sh "$TARGET_TAG"
+
+      - name: Set up JDK
+        if: steps.detect.outputs.should_sync == 'true'
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Build and test
+        if: steps.detect.outputs.should_sync == 'true'
+        id: build
+        working-directory: build
+        run: ./gradlew build
+
+      - name: Compute version
+        if: steps.detect.outputs.should_sync == 'true'
+        id: version
+        env:
+          TARGET_TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          BASE="${TARGET_TAG#v}"
+          CURRENT=$(cat .upstream-version)
+          if [ "$TARGET_TAG" != "$CURRENT" ]; then
+            N=1
+          else
+            COUNT=$(git rev-list --count $(git log -1 --format=%H -- .upstream-version)..HEAD)
+            N=$((COUNT + 1))
+          fi
+          VERSION="${BASE}-pkware.${N}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      - name: Publish to Maven Central
+        if: steps.detect.outputs.should_sync == 'true'
+        working-directory: build
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_KEY_ID: ${{ secrets.SIGNING_KEY_ID }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          PUBLISH_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./gradlew publishToSonatype \
+            -PoverrideVersion="$PUBLISH_VERSION"
+
+      - name: Create GitHub Release
+        if: steps.detect.outputs.should_sync == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET_TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "Temporal SDK ${TARGET_TAG} (PKWARE variant)" \
+            --notes "Based on upstream [${TARGET_TAG}](https://github.com/temporalio/sdk-java/releases/tag/${TARGET_TAG}).
+
+          **Active patches:**
+          $(ls -1 patches/*.patch | sed 's|patches/||' | sed 's/^/- /')"
+
+      - name: Update .upstream-version
+        if: steps.detect.outputs.should_sync == 'true'
+        env:
+          TARGET_TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          echo "$TARGET_TAG" > .upstream-version
+          ./scripts/create-patches.sh
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .upstream-version patches/
+          git commit -m "Sync to upstream $TARGET_TAG" || true
+          git push
+
+      - name: Create issue on patch conflict
+        if: failure() && steps.patch.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.detect.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "Patch conflict on upstream ${TARGET_TAG}" \
+            --body "Patches failed to apply against upstream [${TARGET_TAG}](https://github.com/temporalio/sdk-java/releases/tag/${TARGET_TAG}).
+
+          **Run:** ${RUN_URL}
+
+          Clone the repo, run \`./scripts/apply-patches.sh ${TARGET_TAG}\`, resolve conflicts, then \`./scripts/create-patches.sh\`."
+
+      - name: Create issue on test failure
+        if: failure() && steps.build.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.detect.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "Test failure on upstream ${TARGET_TAG}" \
+            --body "Patches applied cleanly but build/tests failed against upstream [${TARGET_TAG}](https://github.com/temporalio/sdk-java/releases/tag/${TARGET_TAG}).
+
+          **Run:** ${RUN_URL}
+
+          Likely an upstream behavior change that affects our patches."
