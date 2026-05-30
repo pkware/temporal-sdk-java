@@ -102,7 +102,7 @@ jobs:
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
           PUBLISH_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          ./gradlew publishToSonatype \
+          ./gradlew publishToSonatype closeAndReleaseSonatypeStagingRepository \
             -PoverrideVersion="$PUBLISH_VERSION"
 
       - name: Create GitHub Release
