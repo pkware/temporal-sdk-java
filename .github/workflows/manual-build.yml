@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_tests:
+        description: 'Skip tests (compile only). Use for publishing when flaky upstream tests block.'
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -40,7 +45,7 @@ jobs:
 
       - name: Build and test
         working-directory: build
-        run: ./gradlew build
+        run: ./gradlew ${{ inputs.skip_tests && 'assemble' || 'build' }}
 
       - name: Compute version
         if: inputs.publish
