@@ -1,4 +1,4 @@
-From 7c6bd04158b6cda8a7850a7ee2c9b6f2c9a16ed8 Mon Sep 17 00:00:00 2001
+From 091ae33efd46c9d4082921136703efb2767709ff Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 28 May 2026 11:52:21 -0400
 Subject: [PATCH] Add Wire protobuf support
