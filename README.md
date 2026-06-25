@@ -8,7 +8,7 @@ Patch-based fork of [temporalio/sdk-java](https://github.com/temporalio/sdk-java
 |-------|-------------|
 | 0001 | Replace Jackson with Moshi as default JSON converter |
 | 0002 | Remove GSON dependency |
-| 0003 | Replace grpc-netty-shaded with grpc-okhttp |
+| 0003 | Replace grpc-netty-shaded with grpc-netty (real, un-shaded) |
 | 0004 | Change groupId to `com.pkware.temporal` |
 
 ## Maven coordinates
