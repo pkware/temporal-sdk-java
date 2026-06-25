@@ -1,4 +1,4 @@
-From 9c8aee90bc90d62c37f31f0ce0435fb837682785 Mon Sep 17 00:00:00 2001
+From fe9e23829a4eb5bf6900dfcd957bb74621992306 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:53:54 -0400
 Subject: [PATCH] Change groupId to com.pkware.temporal

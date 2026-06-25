@@ -1,4 +1,4 @@
-From 091ae33efd46c9d4082921136703efb2767709ff Mon Sep 17 00:00:00 2001
+From 9adb640d5b4f6cda30a91dc6ca192287d9201705 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 28 May 2026 11:52:21 -0400
 Subject: [PATCH] Add Wire protobuf support
@@ -40,7 +40,7 @@ index 6dcbcc7..a304c21 100644
      id 'net.ltgt.errorprone' version '4.1.0' apply false
      id 'io.github.gradle-nexus.publish-plugin' version '1.3.0'
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index 5d1e854..1363a3d 100644
+index 3e39f30..7d33f70 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -1,5 +1,18 @@

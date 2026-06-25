@@ -1,4 +1,4 @@
-From 4b542cdcdaf56ab9e5d6e96f07c6d8bb14eae106 Mon Sep 17 00:00:00 2001
+From e0bd24eeff0ef8a51f4ca4ef64e4996be2d0b670 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 25 Jun 2026 12:18:14 -0400
 Subject: [PATCH] Replace grpc-netty-shaded with grpc-netty
@@ -68,7 +68,7 @@ index 1da1e24..9e0633c 100644
      api "io.grpc:grpc-services" //Standard gRPC HealthCheck Response class
      api "io.grpc:grpc-inprocess" //For the in-process time skipping test server
 diff --git a/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ChannelManager.java b/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ChannelManager.java
-index da39c74..b1b6f40 100644
+index 4d32633..91472d3 100644
 --- a/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ChannelManager.java
 +++ b/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ChannelManager.java
 @@ -5,7 +5,7 @@ import io.grpc.*;
@@ -81,7 +81,7 @@ index da39c74..b1b6f40 100644
  import io.temporal.api.workflowservice.v1.GetSystemInfoResponse.Capabilities;
  import io.temporal.internal.retryer.GrpcRetryer;
 diff --git a/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ServiceStubsOptions.java b/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ServiceStubsOptions.java
-index 0c3d8ae..8b156e7 100644
+index 5ab5ddc..1b6f4d9 100644
 --- a/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ServiceStubsOptions.java
 +++ b/temporal-serviceclient/src/main/java/io/temporal/serviceclient/ServiceStubsOptions.java
 @@ -4,7 +4,7 @@ import com.google.common.base.MoreObjects;
@@ -93,7 +93,7 @@ index 0c3d8ae..8b156e7 100644
  import io.temporal.authorization.AuthorizationGrpcMetadataProvider;
  import io.temporal.authorization.AuthorizationTokenSupplier;
  import java.time.Duration;
-@@ -510,7 +510,7 @@ public class ServiceStubsOptions {
+@@ -531,7 +531,7 @@ public class ServiceStubsOptions {
      /**
       * Gives an opportunity to provide some additional configuration to the channel builder or
       * override configurations done by the Temporal Stubs. Currently, Temporal Stubs use {@link
@@ -102,7 +102,7 @@ index 0c3d8ae..8b156e7 100644
       *
       * <p>Advanced API
       *
-@@ -518,9 +518,8 @@ public class ServiceStubsOptions {
+@@ -539,9 +539,8 @@ public class ServiceStubsOptions {
       *
       * @param channelInitializer listener that will be called as a last step of channel creation if
       *     Stubs are configured with {@link Builder#setTarget(String)}. The listener is called with
