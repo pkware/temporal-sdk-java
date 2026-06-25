@@ -1,4 +1,4 @@
-From a2fe376e6c9254a6f4f5339ad0a4b96eb0dbf203 Mon Sep 17 00:00:00 2001
+From b0e756ce00e3de1fe8c039ba2fb997f3dec4096a Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Moshi
@@ -16,7 +16,7 @@ jackson-module-kotlin. Excludes temporal-envconfig (jackson-dataformat-toml).
 ---
  settings.gradle                               |  22 +-
  temporal-bom/build.gradle                     |   7 -
- temporal-sdk/build.gradle                     |  96 +-------
+ temporal-sdk/build.gradle                     | 100 +-------
  .../Jackson3JsonPayloadConverterTest.java     | 216 ------------------
  .../common/converter/CodecDataConverter.java  |   9 +-
  .../common/converter/DataConverter.java       |   4 +-
@@ -33,17 +33,17 @@ jackson-module-kotlin. Excludes temporal-envconfig (jackson-dataformat-toml).
  .../internal/common/InternalUtils.java        |   4 +-
  .../temporal/internal/common/NexusUtil.java   |  31 ++-
  .../history/LocalActivityMarkerMetadata.java  |  12 +-
+ .../internal/nexus/OperationToken.java        |  23 +-
  .../internal/nexus/OperationTokenType.java    |   5 -
  .../internal/nexus/OperationTokenUtil.java    |  21 +-
- .../nexus/WorkflowRunOperationToken.java      |  23 +-
  .../temporal/payload/codec/PayloadCodec.java  |   4 +-
  .../Jackson3JsonPayloadConverter.java         | 134 -----------
  .../ActivityHeartbeatThrottlingTest.java      |   4 +-
  .../JacksonJsonPayloadConverterTest.java      | 158 -------------
  .../MoshiJsonPayloadConverterTest.java        | 105 +++++++++
- .../internal/nexus/WorkflowRunTokenTest.java  |  39 ++--
+ .../internal/nexus/WorkflowRunTokenTest.java  |  37 ++-
  .../java/io/temporal/workflow/MemoTest.java   |   2 +-
- 29 files changed, 576 insertions(+), 900 deletions(-)
+ 29 files changed, 576 insertions(+), 902 deletions(-)
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillis.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisAdapter.java
@@ -112,7 +112,7 @@ index e73d0d3..18f0c5c 100644
      }
  }
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index d80285a..4000b60 100644
+index 9e914e3..7ac071f 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -2,7 +2,6 @@ description = '''Temporal Workflow Java SDK'''
@@ -231,7 +231,7 @@ index d80285a..4000b60 100644
  }
  
  task testResourceIndependent(type: Test) {
-@@ -172,36 +115,6 @@ testing {
+@@ -172,40 +115,6 @@ testing {
              }
          }
  
@@ -247,8 +247,10 @@ index d80285a..4000b60 100644
 -            targets {
 -                all {
 -                    testTask.configure {
--                        javaLauncher = javaToolchains.launcherFor {
--                            languageVersion = JavaLanguageVersion.of(17)
+-                        if (project.hasProperty("testJavaVersion")) {
+-                            javaLauncher = javaToolchains.launcherFor {
+-                                languageVersion = JavaLanguageVersion.of(project.property("testJavaVersion") as int)
+-                            }
 -                        }
 -                        shouldRunAfter(test)
 -                    }
@@ -257,18 +259,20 @@ index d80285a..4000b60 100644
 -        }
 -
 -        // Unlike virtualThreadTests, jackson3Tests source directly imports Jackson 3 types
--        // and java17 classes, so the compile task also needs a Java 17 compiler (not just
+-        // and java17 classes, so the compile task also needs a Java 17+ compiler (not just
 -        // the test launcher).
 -        tasks.named('compileJackson3TestsJava') {
--            javaCompiler = javaToolchains.compilerFor {
--                languageVersion = JavaLanguageVersion.of(17)
+-            if (project.hasProperty("testJavaVersion")) {
+-                javaCompiler = javaToolchains.compilerFor {
+-                    languageVersion = JavaLanguageVersion.of(project.property("testJavaVersion") as int)
+-                }
 -            }
 -        }
 -
          virtualThreadTests(JvmTestSuite) {
              targets {
                  all {
-@@ -242,6 +155,5 @@ testing {
+@@ -250,6 +159,5 @@ testing {
  }
  
  tasks.named('check') {
@@ -1353,6 +1357,50 @@ index 8e29a67..7aa5ded 100644
    private Duration backoff;
  
    public LocalActivityMarkerMetadata() {}
+diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
+index 4bd5635..f399a15 100644
+--- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
++++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
+@@ -1,34 +1,21 @@
+ package io.temporal.internal.nexus;
+ 
+-import com.fasterxml.jackson.annotation.JsonInclude;
+-import com.fasterxml.jackson.annotation.JsonProperty;
++import com.squareup.moshi.Json;
+ 
+ /** Deserialized representation of a Nexus operation token. */
+ public class OperationToken {
+-  @JsonProperty("v")
+-  @JsonInclude(JsonInclude.Include.NON_NULL)
++  @Json(name = "v")
+   private final Integer version;
+ 
+-  @JsonProperty("t")
++  @Json(name = "t")
+   private final OperationTokenType type;
+ 
+-  @JsonProperty("ns")
++  @Json(name = "ns")
+   private final String namespace;
+ 
+-  @JsonProperty("wid")
++  @Json(name = "wid")
+   private final String workflowId;
+ 
+-  public OperationToken(
+-      @JsonProperty("t") Integer type,
+-      @JsonProperty("ns") String namespace,
+-      @JsonProperty("wid") String workflowId,
+-      @JsonProperty("v") Integer version) {
+-    this.type = OperationTokenType.fromValue(type);
+-    this.namespace = namespace;
+-    this.workflowId = workflowId;
+-    this.version = version;
+-  }
+-
+   public OperationToken(OperationTokenType type, String namespace, String workflowId) {
+     this.type = type;
+     this.namespace = namespace;
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenType.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenType.java
 index 11aa57a..46c7534 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenType.java
@@ -1380,7 +1428,7 @@ index 11aa57a..46c7534 100644
      if (value == null) {
        return UNKNOWN;
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
-index 1f4869b..d448563 100644
+index 737a84a..70a2331 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
 @@ -1,16 +1,14 @@
@@ -1400,80 +1448,42 @@ index 1f4869b..d448563 100644
  public class OperationTokenUtil {
 -  private static final ObjectMapper mapper = new ObjectMapper().registerModule(new Jdk8Module());
 -  private static final ObjectWriter ow = mapper.writer();
-+  private static final JsonAdapter<WorkflowRunOperationToken> tokenAdapter =
-+      MoshiJsonPayloadConverter.newDefaultMoshi().adapter(WorkflowRunOperationToken.class);
++  private static final JsonAdapter<OperationToken> tokenAdapter =
++      MoshiJsonPayloadConverter.newDefaultMoshi().adapter(OperationToken.class);
    private static final Base64.Decoder decoder = Base64.getUrlDecoder();
    private static final Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
  
-@@ -22,12 +20,11 @@ public class OperationTokenUtil {
-   public static WorkflowRunOperationToken loadWorkflowRunOperationToken(String operationToken) {
-     WorkflowRunOperationToken token;
+@@ -23,8 +21,7 @@ public class OperationTokenUtil {
+   public static OperationToken loadOperationToken(String operationToken) {
+     OperationToken token;
      try {
--      JavaType reference = mapper.getTypeFactory().constructType(WorkflowRunOperationToken.class);
+-      JavaType reference = mapper.getTypeFactory().constructType(OperationToken.class);
 -      token = mapper.readValue(decoder.decode(operationToken), reference);
 +      token = tokenAdapter.fromJson(new String(decoder.decode(operationToken)));
      } catch (Exception e) {
        throw new IllegalArgumentException("Failed to parse operation token: " + e.getMessage());
      }
+@@ -45,7 +42,7 @@ public class OperationTokenUtil {
+    */
+   public static OperationToken loadWorkflowRunOperationToken(String operationToken) {
+     OperationToken token = loadOperationToken(operationToken);
 -    if (!token.getType().equals(OperationTokenType.WORKFLOW_RUN)) {
 +    if (!OperationTokenType.WORKFLOW_RUN.equals(token.getType())) {
        throw new IllegalArgumentException(
            "Invalid workflow run token: incorrect operation token type: " + token.getType());
      }
-@@ -51,8 +48,8 @@ public class OperationTokenUtil {
+@@ -63,9 +60,9 @@ public class OperationTokenUtil {
  
    /** Generate a workflow run operation token from a workflow ID and namespace. */
    public static String generateWorkflowRunOperationToken(String workflowId, String namespace)
 -      throws JsonProcessingException {
--    String json = ow.writeValueAsString(new WorkflowRunOperationToken(namespace, workflowId));
 +      throws IOException {
-+    String json = tokenAdapter.toJson(new WorkflowRunOperationToken(namespace, workflowId));
+     String json =
+-        ow.writeValueAsString(
++        tokenAdapter.toJson(
+             new OperationToken(OperationTokenType.WORKFLOW_RUN, namespace, workflowId));
      return encoder.encodeToString(json.getBytes());
    }
- 
-diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/WorkflowRunOperationToken.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/WorkflowRunOperationToken.java
-index 2c8d1ac..8f1d88c 100644
---- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/WorkflowRunOperationToken.java
-+++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/WorkflowRunOperationToken.java
-@@ -1,33 +1,20 @@
- package io.temporal.internal.nexus;
- 
--import com.fasterxml.jackson.annotation.JsonInclude;
--import com.fasterxml.jackson.annotation.JsonProperty;
-+import com.squareup.moshi.Json;
- 
- public class WorkflowRunOperationToken {
--  @JsonProperty("v")
--  @JsonInclude(JsonInclude.Include.NON_NULL)
-+  @Json(name = "v")
-   private final Integer version;
- 
--  @JsonProperty("t")
-+  @Json(name = "t")
-   private final OperationTokenType type;
- 
--  @JsonProperty("ns")
-+  @Json(name = "ns")
-   private final String namespace;
- 
--  @JsonProperty("wid")
-+  @Json(name = "wid")
-   private final String workflowId;
- 
--  public WorkflowRunOperationToken(
--      @JsonProperty("t") Integer type,
--      @JsonProperty("ns") String namespace,
--      @JsonProperty("wid") String workflowId,
--      @JsonProperty("v") Integer version) {
--    this.type = OperationTokenType.fromValue(type);
--    this.namespace = namespace;
--    this.workflowId = workflowId;
--    this.version = version;
--  }
--
-   public WorkflowRunOperationToken(String namespace, String workflowId) {
-     this.type = OperationTokenType.WORKFLOW_RUN;
-     this.namespace = namespace;
 diff --git a/temporal-sdk/src/main/java/io/temporal/payload/codec/PayloadCodec.java b/temporal-sdk/src/main/java/io/temporal/payload/codec/PayloadCodec.java
 index ef164d3..617736c 100644
 --- a/temporal-sdk/src/main/java/io/temporal/payload/codec/PayloadCodec.java
@@ -1933,10 +1943,10 @@ index 0000000..a5d3315
 +  }
 +}
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java
-index fbf14d2..79f402c 100644
+index 1f22fe8..d3d50eb 100644
 --- a/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java
-@@ -1,43 +1,35 @@
+@@ -1,43 +1,36 @@
  package io.temporal.internal.nexus;
  
 -import com.fasterxml.jackson.core.JsonProcessingException;
@@ -1954,14 +1964,15 @@ index fbf14d2..79f402c 100644
 -      new ObjectMapper().registerModule(new Jdk8Module()).writer();
 -  private static final ObjectReader or =
 -      new ObjectMapper().registerModule(new Jdk8Module()).reader();
-+  private static final JsonAdapter<WorkflowRunOperationToken> tokenAdapter =
-+      MoshiJsonPayloadConverter.newDefaultMoshi().adapter(WorkflowRunOperationToken.class);
++  private static final JsonAdapter<OperationToken> tokenAdapter =
++      MoshiJsonPayloadConverter.newDefaultMoshi().adapter(OperationToken.class);
    private static final Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
  
    @Test
 -  public void serializeWorkflowRunToken() throws JsonProcessingException {
 +  public void serializeWorkflowRunToken() {
-     WorkflowRunOperationToken token = new WorkflowRunOperationToken("namespace", "workflowId");
+     OperationToken token =
+         new OperationToken(OperationTokenType.WORKFLOW_RUN, "namespace", "workflowId");
 -    String json = ow.writeValueAsString(token);
 -    final JsonNode node = new ObjectMapper().readTree(json);
 +    String json = tokenAdapter.toJson(token);
@@ -1982,26 +1993,24 @@ index fbf14d2..79f402c 100644
    @Test
    public void deserializeWorkflowRunTokenWithVersion() throws IOException {
      String json = "{\"t\":1,\"ns\":\"namespace\",\"wid\":\"workflowId\",\"v\":1}";
--    JavaType reference =
--        new ObjectMapper().getTypeFactory().constructType(WorkflowRunOperationToken.class);
--    WorkflowRunOperationToken token = new ObjectMapper().readValue(json.getBytes(), reference);
+-    JavaType reference = new ObjectMapper().getTypeFactory().constructType(OperationToken.class);
+-    OperationToken token = new ObjectMapper().readValue(json.getBytes(), reference);
 -    // Assert that the serialized JSON is as expected
-+    WorkflowRunOperationToken token = tokenAdapter.fromJson(json);
++    OperationToken token = tokenAdapter.fromJson(json);
      Assert.assertEquals(OperationTokenType.WORKFLOW_RUN, token.getType());
 -    Assert.assertEquals(new Integer(1), token.getVersion());
 +    Assert.assertEquals(Integer.valueOf(1), token.getVersion());
      Assert.assertEquals("namespace", token.getNamespace());
      Assert.assertEquals("workflowId", token.getWorkflowId());
    }
-@@ -45,10 +37,7 @@ public class WorkflowRunTokenTest {
+@@ -45,9 +38,7 @@ public class WorkflowRunTokenTest {
    @Test
    public void deserializeWorkflowRunToken() throws IOException {
      String json = "{\"t\":1,\"ns\":\"namespace\",\"wid\":\"workflowId\"}";
--    JavaType reference =
--        new ObjectMapper().getTypeFactory().constructType(WorkflowRunOperationToken.class);
--    WorkflowRunOperationToken token = new ObjectMapper().readValue(json.getBytes(), reference);
+-    JavaType reference = new ObjectMapper().getTypeFactory().constructType(OperationToken.class);
+-    OperationToken token = new ObjectMapper().readValue(json.getBytes(), reference);
 -    // Assert that the serialized JSON is as expected
-+    WorkflowRunOperationToken token = tokenAdapter.fromJson(json);
++    OperationToken token = tokenAdapter.fromJson(json);
      Assert.assertEquals(OperationTokenType.WORKFLOW_RUN, token.getType());
      Assert.assertNull(null, token.getVersion());
      Assert.assertEquals("namespace", token.getNamespace());

@@ -1,4 +1,4 @@
-From 0d7445d0e412cc0c1adb2da9aa9045bda946551f Mon Sep 17 00:00:00 2001
+From c92c4c63735c19badc6d9a0ad3e28b74947aa892 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:41:44 -0400
 Subject: [PATCH] Remove GSON dependency
@@ -17,7 +17,7 @@ Remove dead fixStackTrace method from WorkflowExecutionUtils.
  delete mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/GsonJsonPayloadConverter.java
 
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index 4000b60..5d1e854 100644
+index 7ac071f..3e39f30 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -5,7 +5,6 @@ dependencies {
