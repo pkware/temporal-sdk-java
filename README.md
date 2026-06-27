@@ -6,17 +6,36 @@ Patch-based fork of [temporalio/sdk-java](https://github.com/temporalio/sdk-java
 
 | Patch | Description |
 |-------|-------------|
-| 0001 | Replace Jackson with Moshi as default JSON converter |
-| 0002 | Remove GSON dependency |
-| 0003 | Replace grpc-netty-shaded with grpc-netty (real, un-shaded) |
-| 0004 | Change groupId to `com.pkware.temporal` |
+| 0001 | Replace Jackson with Micronaut Serde as default JSON converter (also bumps the build to JDK 25 / Gradle 9) |
+| 0002 | Replace grpc-netty-shaded with grpc-netty (real, un-shaded) |
+| 0003 | Change groupId to `com.pkware.temporal` |
+| 0004 | Add Wire protobuf support |
+
+## Serialization: Micronaut Serde
+
+The default `json/plain` `PayloadConverter` is `io.temporal.common.converter.MicronautSerdePayloadConverter`,
+backed by Micronaut Serde (Jackson 3 streaming + `jackson-annotations`, **no `jackson-databind`**). In
+production, construct the data converter with your application's injected `io.micronaut.serde.ObjectMapper`:
+
+```java
+DataConverter converter =
+    DefaultDataConverter.newDefaultInstance()
+        .withPayloadConverterOverrides(new MicronautSerdePayloadConverter(appObjectMapper));
+```
+
+The no-arg constructor falls back to a library-private mapper (used by SDK defaults and tests).
+
+**Behavior differences from the previous Jackson converter** (Serde is reflection-free / compile-time):
+
+- Workflow argument/result types must be `@io.micronaut.serde.annotation.Serdeable`.
+- **Public-field POJOs serialize to `{}`** — Serde uses getter/property access by default. Use records, getters, or `@Introspected(accessKind = {FIELD, METHOD})`.
 
 ## Maven coordinates
 
 ```kotlin
 // build.gradle.kts
-implementation("com.pkware.temporal:temporal-sdk:1.35.0-pkware.1")
-testImplementation("com.pkware.temporal:temporal-testing:1.35.0-pkware.1")
+implementation("com.pkware.temporal:temporal-sdk:1.36.0-pkware.1")
+testImplementation("com.pkware.temporal:temporal-testing:1.36.0-pkware.1")
 ```
 
 ## Version scheme
@@ -45,20 +64,20 @@ cd build
 ./gradlew test
 ```
 
-Requires JDK 21.
+Requires **JDK 25** (Micronaut Serde 3.x requires JVM 17+; the build targets `--release 25`). The Gradle wrapper is 9.x, which runs natively on JDK 25.
 
 ### Publishing locally
 
 ```bash
 cd build
-./gradlew publishToMavenLocal -PoverrideVersion=1.35.0-pkware.1
+./gradlew publishToMavenLocal -PoverrideVersion=1.36.0-pkware.1
 ```
 
 Then add `mavenLocal()` to your consuming project's repositories block.
 
 ## Dependency versions
 
-New dependencies introduced by patches (e.g. Moshi) have their versions in `overlay/gradle.properties`. This file is copied into `build/` by `apply-patches.sh` and is scannable by Renovate.
+New dependencies introduced by patches (Micronaut Serde, Wire) have their versions in `overlay/gradle.properties` (`micronautSerdeVersion`, `micronautVersion`, `wireVersion`), along with the Gradle heap settings the JDK-25 build needs. This file is copied into `build/` by `apply-patches.sh` and is scannable by Renovate. Versions bumped on existing dependencies (Mockito, logback, Error Prone) live in the patched `build.gradle` itself.
 
 ## Modifying patches
 
