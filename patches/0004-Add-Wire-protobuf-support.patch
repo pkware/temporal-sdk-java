@@ -1,32 +1,25 @@
-From 9adb640d5b4f6cda30a91dc6ca192287d9201705 Mon Sep 17 00:00:00 2001
+From 9e1b1cf3a7414e9053ab93d2b302117dec51b58b Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
-Date: Thu, 28 May 2026 11:52:21 -0400
+Date: Sat, 27 Jun 2026 15:10:41 -0400
 Subject: [PATCH] Add Wire protobuf support
 
-WirePayloadConverter handles com.squareup.wire.Message types using
-binary encoding (protobuf/wire). Added to STANDARD_PAYLOAD_CONVERTERS
-between ProtobufPayloadConverter and MoshiJsonPayloadConverter.
-
-Wire's WireJsonAdapterFactory registered on MoshiJsonPayloadConverter
-so Wire types also work through JSON path.
-
-Adds wire-runtime and wire-moshi-adapter as api dependencies.
-Wire Gradle plugin compiles test .proto for WirePayloadConverterTest.
+Wire Message types serialize as native protobuf binary (protobuf/wire)
+via the generated ADAPTER.
 ---
  build.gradle                                  |   6 ++
- temporal-sdk/build.gradle                     |  15 +++
+ gradle/publishing.gradle                      |  46 +++-----
+ temporal-sdk/build.gradle                     |  14 +++
  .../converter/DefaultDataConverter.java       |   1 +
- .../converter/MoshiJsonPayloadConverter.java  |   3 +
  .../converter/WirePayloadConverter.java       |  61 +++++++++++
  .../converter/WirePayloadConverterTest.java   | 100 ++++++++++++++++++
  temporal-sdk/src/test/proto/test_wire.proto   |  15 +++
- 7 files changed, 201 insertions(+)
+ 7 files changed, 214 insertions(+), 29 deletions(-)
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/WirePayloadConverter.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/WirePayloadConverterTest.java
  create mode 100644 temporal-sdk/src/test/proto/test_wire.proto
 
 diff --git a/build.gradle b/build.gradle
-index 6dcbcc7..a304c21 100644
+index 15bdcdd..e20c58d 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -1,3 +1,9 @@
@@ -38,12 +31,97 @@ index 6dcbcc7..a304c21 100644
 +
  plugins {
      id 'net.ltgt.errorprone' version '4.1.0' apply false
-     id 'io.github.gradle-nexus.publish-plugin' version '1.3.0'
+     id 'io.github.gradle-nexus.publish-plugin' version '2.0.0'
+diff --git a/gradle/publishing.gradle b/gradle/publishing.gradle
+index fdde671..86a8c67 100644
+--- a/gradle/publishing.gradle
++++ b/gradle/publishing.gradle
+@@ -1,9 +1,8 @@
+ nexusPublishing {
+-    // to release to sonatype use ./gradlew publishToSonatype
+     repositories {
+         sonatype {
+-            username = project.hasProperty('ossrhUsername') ? project.property('ossrhUsername') : ''
+-            password = project.hasProperty('ossrhPassword') ? project.property('ossrhPassword') : ''
++            username = System.getenv('NEXUS_USERNAME') ?: ''
++            password = System.getenv('NEXUS_PASSWORD') ?: ''
+             nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+             snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
+         }
+@@ -27,32 +26,19 @@ subprojects {
+                 }
+             }
+         }
+-
+-        // To test local publishing use ./gradlew publish and comment nexusPublishing
+-        //
+-        // repositories {
+-        //     maven {
+-        //         def releasesRepoUrl = "$System.env.HOME/repos/releases"
+-        //         def snapshotsRepoUrl = "$System.env.HOME/repos/snapshots"
+-        //         url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+-        //     }
+-        // }
+     }
+ 
+-    // Customize the pom for all publications and sign all, in afterEvaluate so
+-    // subproject build.gradle files can contribute (e.g. description) and custom
+-    // publications (e.g. shadow) exist.
+     afterEvaluate { subproject ->
+         subproject.publishing.publications.withType(MavenPublication).each { publication ->
+             publication.pom {
+                 name = subproject.description
+                 description = subproject.description
+-                url = 'https://github.com/temporalio/sdk-java'
++                url = 'https://github.com/pkware/temporal-sdk-java'
+ 
+                 scm {
+-                    connection = 'scm:git@github.com:temporalio/sdk-java.git'
+-                    developerConnection = 'scm:git@github.com:temporalio/sdk-java.git'
+-                    url = 'https://github.com/temporalio/sdk-java.git'
++                    connection = 'scm:git@github.com:pkware/temporal-sdk-java.git'
++                    developerConnection = 'scm:git@github.com:pkware/temporal-sdk-java.git'
++                    url = 'https://github.com/pkware/temporal-sdk-java.git'
+                 }
+ 
+                 licenses {
+@@ -64,20 +50,22 @@ subprojects {
+ 
+                 developers {
+                     developer {
+-                        id = 'mfateev'
+-                        name = 'Maxim Fateev'
+-                        email = 'maxim@temporal.io'
+-                    }
+-                    developer {
+-                        id = 'samarabbas'
+-                        name = 'Samar Abbas'
+-                        email = 'samar@temporal.io'
++                        id = 'pkware'
++                        name = 'PKWARE, Inc.'
++                        email = 'support@pkware.com'
+                     }
+                 }
+             }
+         }
+-        if (subproject.hasProperty('signing.keyId')) {
++
++        def signingKey = System.getenv('SIGNING_KEY')
++        if (signingKey) {
+             subproject.signing {
++                useInMemoryPgpKeys(
++                    System.getenv('SIGNING_KEY_ID'),
++                    signingKey,
++                    System.getenv('SIGNING_PASSWORD') ?: ''
++                )
+                 subproject.publishing.publications.withType(MavenPublication).each { publication ->
+                     sign publication
+                 }
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index 3e39f30..7d33f70 100644
+index ef8dc66..5826408 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
-@@ -1,5 +1,18 @@
+@@ -1,10 +1,24 @@
 +apply plugin: 'com.squareup.wire'
 +
  description = '''Temporal Workflow Java SDK'''
@@ -62,17 +140,14 @@ index 3e39f30..7d33f70 100644
  dependencies {
      api(platform("io.grpc:grpc-bom:$grpcVersion"))
      api(platform("io.micrometer:micrometer-bom:$micrometerVersion"))
-@@ -10,6 +23,8 @@ dependencies {
  
-     implementation "com.google.guava:guava:$guavaVersion"
-     api "com.squareup.moshi:moshi:$moshiVersion"
+     api project(':temporal-serviceclient')
 +    api "com.squareup.wire:wire-runtime:$wireVersion"
-+    api "com.squareup.wire:wire-moshi-adapter:$wireVersion"
- 
-     // compileOnly and testImplementation because this dependency is needed only to work with json format of history
-     // which shouldn't be needed for any production usage of temporal-sdk.
+     api "com.google.code.gson:gson:$gsonVersion"
+     api "io.micrometer:micrometer-core"
+     api "io.nexusrpc:nexus-sdk:$nexusVersion"
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
-index d86e948..b8e0b11 100644
+index dde9d83..b45822f 100644
 --- a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
 @@ -18,6 +18,7 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
@@ -80,37 +155,9 @@ index d86e948..b8e0b11 100644
      new ProtobufJsonPayloadConverter(),
      new ProtobufPayloadConverter(),
 +    new WirePayloadConverter(),
-     new MoshiJsonPayloadConverter()
+     new MicronautSerdePayloadConverter()
    };
  
-diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/MoshiJsonPayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/MoshiJsonPayloadConverter.java
-index 8b441e2..fad32f2 100644
---- a/temporal-sdk/src/main/java/io/temporal/common/converter/MoshiJsonPayloadConverter.java
-+++ b/temporal-sdk/src/main/java/io/temporal/common/converter/MoshiJsonPayloadConverter.java
-@@ -3,6 +3,7 @@ package io.temporal.common.converter;
- import com.google.protobuf.ByteString;
- import com.squareup.moshi.JsonAdapter;
- import com.squareup.moshi.Moshi;
-+import com.squareup.wire.WireJsonAdapterFactory;
- import io.temporal.api.common.v1.Payload;
- import java.io.IOException;
- import java.lang.reflect.ParameterizedType;
-@@ -30,6 +31,7 @@ public class MoshiJsonPayloadConverter implements PayloadConverter {
-     Moshi.Builder builder =
-         userMoshi
-             .newBuilder()
-+            .add(new WireJsonAdapterFactory())
-             .add(new DurationMillisAdapter())
-             .add(new OperationTokenTypeAdapter());
-     StandardAdapters.registerAll(builder);
-@@ -44,6 +46,7 @@ public class MoshiJsonPayloadConverter implements PayloadConverter {
-   public static Moshi newDefaultMoshi() {
-     Moshi.Builder builder =
-         new Moshi.Builder()
-+            .add(new WireJsonAdapterFactory())
-             .add(new DurationMillisAdapter())
-             .add(new OperationTokenTypeAdapter());
-     StandardAdapters.registerAll(builder);
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/WirePayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/WirePayloadConverter.java
 new file mode 100644
 index 0000000..82c8a24
