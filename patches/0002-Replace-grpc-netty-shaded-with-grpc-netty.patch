@@ -1,4 +1,4 @@
-From a930ba39be59181c845cb9fd2a5a86f00082c012 Mon Sep 17 00:00:00 2001
+From 41a8b97b92b860c53e8d2e1713ca6cb01460729c Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 25 Jun 2026 12:18:14 -0400
 Subject: [PATCH] Replace grpc-netty-shaded with grpc-netty
@@ -21,8 +21,9 @@ temporal-serviceclient and temporal-test-server.
  .../native-image.properties                   |  12 +-
  .../reflect-config.json                       | 202 +++++++-------
  .../resource-config.json                      |   2 +-
+ .../serviceclient/GrpcCompressionTest.java    |   2 +-
  .../reachability-metadata.json                | 250 +++++++++---------
- 10 files changed, 247 insertions(+), 248 deletions(-)
+ 11 files changed, 248 insertions(+), 249 deletions(-)
 
 diff --git a/temporal-envconfig/src/main/java/io/temporal/envconfig/ClientConfigProfile.java b/temporal-envconfig/src/main/java/io/temporal/envconfig/ClientConfigProfile.java
 index 3257fbf..3db5b8f 100644
@@ -474,6 +475,19 @@ index a260699..b6c925c 100644
      {"pattern":"\\QMETA-INF/services/io.grpc.LoadBalancerProvider\\E"},
      {"pattern":"\\QMETA-INF/services/io.grpc.NameResolverProvider\\E"},
      {"pattern":"\\QMETA-INF/services/org.slf4j.spi.SLF4JServiceProvider\\E"},
+diff --git a/temporal-serviceclient/src/test/java/io/temporal/serviceclient/GrpcCompressionTest.java b/temporal-serviceclient/src/test/java/io/temporal/serviceclient/GrpcCompressionTest.java
+index 9488627..014f9e7 100644
+--- a/temporal-serviceclient/src/test/java/io/temporal/serviceclient/GrpcCompressionTest.java
++++ b/temporal-serviceclient/src/test/java/io/temporal/serviceclient/GrpcCompressionTest.java
+@@ -8,7 +8,7 @@ import io.grpc.ServerCall;
+ import io.grpc.ServerCallHandler;
+ import io.grpc.ServerInterceptor;
+ import io.grpc.ServerInterceptors;
+-import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
++import io.grpc.netty.NettyServerBuilder;
+ import io.grpc.stub.StreamObserver;
+ import io.grpc.testing.GrpcCleanupRule;
+ import io.temporal.api.workflowservice.v1.GetSystemInfoRequest;
 diff --git a/temporal-test-server/src/main/resources/META-INF/native-image/io.temporal/temporal-test-server/reachability-metadata.json b/temporal-test-server/src/main/resources/META-INF/native-image/io.temporal/temporal-test-server/reachability-metadata.json
 index 5a618cf..6105ae1 100644
 --- a/temporal-test-server/src/main/resources/META-INF/native-image/io.temporal/temporal-test-server/reachability-metadata.json
