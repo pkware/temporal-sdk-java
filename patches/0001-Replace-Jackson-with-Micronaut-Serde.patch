@@ -1,4 +1,4 @@
-From 981de5066e00cfed5f6350cd4d9bc5997aa9da1d Mon Sep 17 00:00:00 2001
+From 6e5446e244d12485a04307934d9fc4f5d3b77ab2 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -274,7 +274,7 @@ index f7cae3b..418936d 100644
  }
  
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index 9e914e3..2073c56 100644
+index d7b090e..2008313 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -2,7 +2,6 @@ description = '''Temporal Workflow Java SDK'''
@@ -323,7 +323,7 @@ index 9e914e3..2073c56 100644
      java21 {
          java {
              srcDirs = ['src/main/java21']
-@@ -53,30 +50,14 @@ sourceSets {
+@@ -53,15 +50,6 @@ sourceSets {
  }
  
  dependencies {
@@ -337,6 +337,10 @@ index 9e914e3..2073c56 100644
 -    java17CompileOnly "tools.jackson.core:jackson-databind:$jackson3Version"
 -
      java21Implementation files(sourceSets.main.output.classesDirs) { builtBy compileJava }
+ }
+ 
+@@ -100,18 +88,11 @@ tasks.named('compilePayloadVisitorGeneratorJava') {
+     options.errorprone.error('MissingCasesInEnumSwitch')
  }
  
 -tasks.named('compileJava17Java') {
@@ -354,7 +358,7 @@ index 9e914e3..2073c56 100644
      into('META-INF/versions/21') {
          from sourceSets.java21.output
      }
-@@ -85,27 +66,6 @@ jar {
+@@ -120,27 +101,6 @@ jar {
      )
  }
  
@@ -382,7 +386,7 @@ index 9e914e3..2073c56 100644
  task registerNamespace(type: JavaExec) {
      getMainClass().set('io.temporal.internal.docker.RegisterTestNamespace')
      classpath = sourceSets.test.runtimeClasspath
-@@ -117,20 +77,9 @@ test {
+@@ -152,20 +112,9 @@ test {
      useJUnit {
          excludeCategories 'io.temporal.worker.IndependentResourceBasedTests'
      }
@@ -406,7 +410,7 @@ index 9e914e3..2073c56 100644
  }
  
  task testResourceIndependent(type: Test) {
-@@ -172,41 +121,11 @@ testing {
+@@ -207,41 +156,11 @@ testing {
              }
          }
  
@@ -451,7 +455,7 @@ index 9e914e3..2073c56 100644
              targets {
                  all {
                      testTask.configure {
-@@ -250,6 +169,5 @@ testing {
+@@ -285,6 +204,5 @@ testing {
  }
  
  tasks.named('check') {
@@ -1292,7 +1296,7 @@ index 91d496b..7365e79 100644
            nextRetryDelay,
            category == null ? ApplicationErrorCategory.UNSPECIFIED : category);
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java b/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
-index 4c5ec49..9324560 100644
+index 0886802..a15efbc 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
 @@ -1,6 +1,5 @@
@@ -1309,8 +1313,8 @@ index 4c5ec49..9324560 100644
 +import java.io.IOException;
  import java.util.*;
  import java.util.stream.Collectors;
- import org.slf4j.Logger;
-@@ -83,7 +83,7 @@ public final class InternalUtils {
+ 
+@@ -80,7 +80,7 @@ public final class InternalUtils {
        operationToken =
            OperationTokenUtil.generateWorkflowRunOperationToken(
                options.getWorkflowId(), nexusContext.getNamespace());
@@ -1485,10 +1489,10 @@ index 8e29a67..3c00c74 100644
  
    public LocalActivityMarkerMetadata() {}
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
-index 0fac526..6c782f1 100644
+index adaecca..25aa6e4 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
-@@ -381,7 +381,7 @@ public class NexusTaskHandlerImpl implements NexusTaskHandler {
+@@ -370,7 +370,7 @@ public class NexusTaskHandlerImpl implements NexusTaskHandler {
          temporalFailure.setStackTrace(e.getStackTrace());
        } else if (e.getState() == OperationState.CANCELED) {
          temporalFailure =
