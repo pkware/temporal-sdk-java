@@ -10,6 +10,7 @@ Patch-based fork of [temporalio/sdk-java](https://github.com/temporalio/sdk-java
 | 0002 | Replace grpc-netty-shaded with grpc-netty (real, un-shaded) |
 | 0003 | Change groupId to `com.pkware.temporal` |
 | 0004 | Add Wire protobuf support |
+| 0005 | Add native OpenTelemetry instrumentation (`temporal-opentelemetry` module) |
 
 ## Serialization: Micronaut Serde
 
