@@ -1,4 +1,4 @@
-From 6e5446e244d12485a04307934d9fc4f5d3b77ab2 Mon Sep 17 00:00:00 2001
+From 408fb99b7d0bb72142deefe4c75b78814e2694b4 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -18,12 +18,20 @@ Error Prone disabled on the 25 modules. Removes jackson-databind, moshi,
 and okio from the runtime classpath.
 ---
  build.gradle                                  |  12 +-
+ contrib/temporal-workflowstreams/build.gradle |   8 +-
+ .../temporal/workflowstreams/PollInput.java   |   4 +
+ .../temporal/workflowstreams/PollResult.java  |   4 +
+ .../workflowstreams/PublishEntry.java         |   4 +
+ .../workflowstreams/PublishInput.java         |   4 +
+ .../io/temporal/workflowstreams/WireItem.java |   4 +
+ .../workflowstreams/WorkflowStreamState.java  |   4 +
+ gradle.properties                             |   7 +
  gradle/errorprone.gradle                      |   8 +-
  gradle/java.gradle                            |  12 +-
  gradle/linting.gradle                         |   4 +-
  gradle/wrapper/gradle-wrapper.properties      |   2 +-
- settings.gradle                               |  22 +-
- temporal-bom/build.gradle                     |   7 -
+ settings.gradle                               |  32 +-
+ temporal-bom/build.gradle                     |   9 -
  temporal-remote-data-encoder/build.gradle     |   2 +-
  temporal-sdk/build.gradle                     | 108 +------
  .../Jackson3JsonPayloadConverterTest.java     | 216 -------------
@@ -75,7 +83,8 @@ and okio from the runtime classpath.
  temporal-test-server/build.gradle             |  15 +-
  .../testservice/TestVisibilityStoreImpl.java  |  49 +++
  temporal-testing/build.gradle                 |   2 +
- 58 files changed, 1081 insertions(+), 1024 deletions(-)
+ 66 files changed, 1124 insertions(+), 1032 deletions(-)
+ create mode 100644 gradle.properties
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
@@ -121,6 +130,170 @@ index 6dcbcc7..15bdcdd 100644
      junitVersion = '4.13.2'
      // Edge Dependencies are used by tests to validate the SDK with the latest version of various libraries.
      // Not just the version of the library the SDK is built against.
+diff --git a/contrib/temporal-workflowstreams/build.gradle b/contrib/temporal-workflowstreams/build.gradle
+index 46a8ec9..2ff802e 100644
+--- a/contrib/temporal-workflowstreams/build.gradle
++++ b/contrib/temporal-workflowstreams/build.gradle
+@@ -3,8 +3,12 @@ description = '''Temporal Workflow Streams: a durable, multi-topic pub/sub log h
+ dependencies {
+     // this module shouldn't carry temporal-sdk with it, especially for situations when users may be using a shaded artifact
+     compileOnly project(':temporal-sdk')
+-    // Jackson annotations lock the cross-SDK wire field names; provided at runtime by temporal-sdk
+-    compileOnly "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
++    // @JsonProperty locks the cross-SDK wire field names; Micronaut Serde honors it via
++    // micronaut-serde-jackson (provided transitively by temporal-sdk). The Serde processor must run
++    // in this module to generate @Serdeable introspections for the wire DTOs.
++    annotationProcessor "io.micronaut:micronaut-inject-java:$micronautVersion"
++    annotationProcessor "io.micronaut.serde:micronaut-serde-processor:$micronautSerdeVersion"
++    compileOnly "com.fasterxml.jackson.core:jackson-annotations:${jacksonVersion}"
+ 
+     testImplementation project(':temporal-sdk')
+     testImplementation project(':temporal-testing')
+diff --git a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollInput.java b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollInput.java
+index 3731330..d8543cc 100644
+--- a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollInput.java
++++ b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollInput.java
+@@ -1,6 +1,8 @@
+ package io.temporal.workflowstreams;
+ 
+ import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.common.Experimental;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -12,6 +14,8 @@ import java.util.List;
+  * with exactly these names.
+  */
+ @Experimental
++@Serdeable
++@Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+ public final class PollInput {
+   /** Topics to filter on. Empty means all topics. */
+   @JsonProperty("topics")
+diff --git a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollResult.java b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollResult.java
+index 5a1c0f0..2e804fd 100644
+--- a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollResult.java
++++ b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PollResult.java
+@@ -1,6 +1,8 @@
+ package io.temporal.workflowstreams;
+ 
+ import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.common.Experimental;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -14,6 +16,8 @@ import java.util.List;
+  * with exactly these names.
+  */
+ @Experimental
++@Serdeable
++@Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+ public final class PollResult {
+   @JsonProperty("items")
+   public List<WireItem> items = new ArrayList<>();
+diff --git a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishEntry.java b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishEntry.java
+index f11b2c9..a7da5a7 100644
+--- a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishEntry.java
++++ b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishEntry.java
+@@ -1,6 +1,8 @@
+ package io.temporal.workflowstreams;
+ 
+ import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.common.Experimental;
+ 
+ /**
+@@ -11,6 +13,8 @@ import io.temporal.common.Experimental;
+  * with exactly these names.
+  */
+ @Experimental
++@Serdeable
++@Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+ public final class PublishEntry {
+   @JsonProperty("topic")
+   public String topic;
+diff --git a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishInput.java b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishInput.java
+index f0c2c40..19222a9 100644
+--- a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishInput.java
++++ b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/PublishInput.java
+@@ -1,6 +1,8 @@
+ package io.temporal.workflowstreams;
+ 
+ import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.common.Experimental;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -12,6 +14,8 @@ import java.util.List;
+  * with exactly these names.
+  */
+ @Experimental
++@Serdeable
++@Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+ public final class PublishInput {
+   @JsonProperty("items")
+   public List<PublishEntry> items = new ArrayList<>();
+diff --git a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WireItem.java b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WireItem.java
+index b88dd90..2050956 100644
+--- a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WireItem.java
++++ b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WireItem.java
+@@ -1,6 +1,8 @@
+ package io.temporal.workflowstreams;
+ 
+ import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.common.Experimental;
+ 
+ /**
+@@ -11,6 +13,8 @@ import io.temporal.common.Experimental;
+  * with exactly these names.
+  */
+ @Experimental
++@Serdeable
++@Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+ public final class WireItem {
+   @JsonProperty("topic")
+   public String topic;
+diff --git a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WorkflowStreamState.java b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WorkflowStreamState.java
+index da80394..1593c96 100644
+--- a/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WorkflowStreamState.java
++++ b/contrib/temporal-workflowstreams/src/main/java/io/temporal/workflowstreams/WorkflowStreamState.java
+@@ -1,6 +1,8 @@
+ package io.temporal.workflowstreams;
+ 
+ import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.common.Experimental;
+ import java.util.ArrayList;
+ import java.util.HashMap;
+@@ -16,6 +18,8 @@ import java.util.Map;
+  * with exactly these names.
+  */
+ @Experimental
++@Serdeable
++@Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+ public final class WorkflowStreamState {
+   @JsonProperty("log")
+   public List<WireItem> log = new ArrayList<>();
+diff --git a/gradle.properties b/gradle.properties
+new file mode 100644
+index 0000000..cebc62b
+--- /dev/null
++++ b/gradle.properties
+@@ -0,0 +1,7 @@
++wireVersion=6.4.0
++micronautSerdeVersion=3.0.0
++micronautVersion=5.0.0
++openTelemetryVersion=1.63.0
++# JDK 25 + Gradle 9 + Micronaut Serde codegen need more heap than Gradle's 512MB default;
++# the full parallel test suite OOMs otherwise.
++org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=768m
 diff --git a/gradle/errorprone.gradle b/gradle/errorprone.gradle
 index 0334b3e..7175c0d 100644
 --- a/gradle/errorprone.gradle
@@ -207,27 +380,39 @@ index df97d72..a351597 100644
  validateDistributionUrl=true
  zipStoreBase=GRADLE_USER_HOME
 diff --git a/settings.gradle b/settings.gradle
-index fe80370..dd49169 100644
+index 3699ff1..99b7028 100644
 --- a/settings.gradle
 +++ b/settings.gradle
-@@ -4,14 +4,18 @@ include 'temporal-serviceclient'
+@@ -4,20 +4,26 @@ include 'temporal-serviceclient'
  include 'temporal-sdk'
  include 'temporal-testing'
  include 'temporal-test-server'
 -include 'temporal-opentracing'
 -project(':temporal-opentracing').projectDir = file('contrib/temporal-opentracing')
+-include 'temporal-opentelemetry'
+-project(':temporal-opentelemetry').projectDir = file('contrib/temporal-opentelemetry')
 -include 'temporal-kotlin'
 -include 'temporal-spring-ai'
 -project(':temporal-spring-ai').projectDir = file('contrib/temporal-spring-ai')
--include 'temporal-spring-boot-autoconfigure'
--include 'temporal-spring-boot-starter'
 +// Excluded: not needed by PKWARE consumers (we use OpenTelemetry)
 +// include 'temporal-opentracing'
 +// project(':temporal-opentracing').projectDir = file('contrib/temporal-opentracing')
++// Excluded: upstream OTel stats reporter depends on temporal-opentracing; not needed by PKWARE
++// include 'temporal-opentelemetry'
++// project(':temporal-opentelemetry').projectDir = file('contrib/temporal-opentelemetry')
 +// Excluded: uses Jackson's KotlinObjectMapperFactory, not needed by PKWARE consumers
 +// include 'temporal-kotlin'
 +// include 'temporal-spring-ai'
 +// project(':temporal-spring-ai').projectDir = file('contrib/temporal-spring-ai')
+ include 'temporal-workflowstreams'
+ project(':temporal-workflowstreams').projectDir = file('contrib/temporal-workflowstreams')
+-include 'temporal-aws-lambda'
+-project(':temporal-aws-lambda').projectDir = file('contrib/temporal-aws-lambda')
+-include 'temporal-spring-boot-autoconfigure'
+-include 'temporal-spring-boot-starter'
++// Excluded: depends on temporal-envconfig (jackson-toml) and upstream temporal-opentelemetry (opentracing)
++// include 'temporal-aws-lambda'
++// project(':temporal-aws-lambda').projectDir = file('contrib/temporal-aws-lambda')
 +// Excluded: not needed by PKWARE consumers
 +// include 'temporal-spring-boot-autoconfigure'
 +// include 'temporal-spring-boot-starter'
@@ -239,15 +424,17 @@ index fe80370..dd49169 100644
 +// Excluded: uses jackson-dataformat-toml, not needed by PKWARE consumers
 +// include 'temporal-envconfig'
 diff --git a/temporal-bom/build.gradle b/temporal-bom/build.gradle
-index e73d0d3..18f0c5c 100644
+index 0316334..d4cc5c8 100644
 --- a/temporal-bom/build.gradle
 +++ b/temporal-bom/build.gradle
-@@ -6,17 +6,10 @@ description = '''Temporal Java BOM'''
+@@ -6,20 +6,11 @@ description = '''Temporal Java BOM'''
  
  dependencies {
      constraints {
 -        api project(':temporal-kotlin')
+-        api project(':temporal-opentelemetry')
 -        api project(':temporal-opentracing')
+-        api project(':temporal-aws-lambda')
          api project(':temporal-remote-data-encoder')
          api project(':temporal-sdk')
          api project(':temporal-serviceclient')
@@ -258,6 +445,7 @@ index e73d0d3..18f0c5c 100644
          api project(':temporal-test-server')
          api project(':temporal-testing')
 -        api project(':temporal-envconfig')
+         api project(':temporal-workflowstreams')
      }
  }
 diff --git a/temporal-remote-data-encoder/build.gradle b/temporal-remote-data-encoder/build.gradle
@@ -1296,7 +1484,7 @@ index 91d496b..7365e79 100644
            nextRetryDelay,
            category == null ? ApplicationErrorCategory.UNSPECIFIED : category);
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java b/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
-index 0886802..a15efbc 100644
+index 72987e3..1319588 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
 @@ -1,6 +1,5 @@
@@ -1314,7 +1502,7 @@ index 0886802..a15efbc 100644
  import java.util.*;
  import java.util.stream.Collectors;
  
-@@ -80,7 +80,7 @@ public final class InternalUtils {
+@@ -81,7 +81,7 @@ public final class InternalUtils {
        operationToken =
            OperationTokenUtil.generateWorkflowRunOperationToken(
                options.getWorkflowId(), nexusContext.getNamespace());
@@ -1438,7 +1626,7 @@ index c96f47f..3f84cb8 100644
        // single-value search attribute
        return Collections.singletonList(
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java b/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
-index 8e29a67..3c00c74 100644
+index 03e00f9..b67507b 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
 @@ -1,7 +1,9 @@
@@ -1454,7 +1642,7 @@ index 8e29a67..3c00c74 100644
  
 @@ -9,24 +11,31 @@ import javax.annotation.Nullable;
   * See <a
-  * href="https://github.com/temporalio/sdk-core/blob/master/protos/local/temporal/sdk/core/external_data/external_data.proto#L12">Core
+  * href="https://github.com/temporalio/sdk-core/blob/main/protos/local/temporal/sdk/core/external_data/external_data.proto#L12">Core
   * Data Structure</a>
 + *
 + * <p>Serialized only via the library-private internal Serde mapper, where {@code backoff} ({@link
@@ -2805,10 +2993,10 @@ index 1f22fe8..e55aa7b 100644
      Assert.assertEquals("workflowId", token.getWorkflowId());
    }
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java b/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
-index 62fcf50..66b97f3 100644
+index 5a6d54f..4435d43 100644
 --- a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
-@@ -1188,7 +1188,7 @@ public class VersionStateMachineTest {
+@@ -1419,7 +1419,7 @@ public class VersionStateMachineTest {
                        null,
                        c);
                  })
