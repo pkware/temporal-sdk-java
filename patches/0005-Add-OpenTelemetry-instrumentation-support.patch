@@ -1,11 +1,11 @@
-From f7890cae6c4fce3a795b927e25fe70983d67a1da Mon Sep 17 00:00:00 2001
+From a7001f75b77be52562d6c5b526914bbcd298f2eb Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Wed, 1 Jul 2026 17:25:34 -0400
 Subject: [PATCH] Add OpenTelemetry instrumentation support
 
 ---
- settings.gradle                               |   3 +-
- temporal-opentelemetry/build.gradle           |  20 ++
+ settings.gradle                               |   4 +-
+ temporal-opentelemetry-tracing/build.gradle   |  20 ++
  .../OpenTelemetryClientInterceptor.java       |  30 ++
  .../opentelemetry/OpenTelemetryOptions.java   | 165 ++++++++++
  .../OpenTelemetrySpanContextCodec.java        |  23 ++
@@ -46,70 +46,74 @@ Subject: [PATCH] Add OpenTelemetry instrumentation support
  .../opentelemetry/WorkflowRetryTest.java      | 214 +++++++++++++
  .../opentelemetry/integration/OTLPTest.java   | 211 +++++++++++++
  .../worker/WorkflowEvictionTest.java          | 114 +++++++
- 42 files changed, 4820 insertions(+), 1 deletion(-)
- create mode 100644 temporal-opentelemetry/build.gradle
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanOperationType.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/StandardTagNames.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java
- create mode 100644 temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java
- create mode 100644 temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
+ 42 files changed, 4821 insertions(+), 1 deletion(-)
+ create mode 100644 temporal-opentelemetry-tracing/build.gradle
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanOperationType.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/StandardTagNames.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java
+ create mode 100644 temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java
+ create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
 
 diff --git a/settings.gradle b/settings.gradle
-index dd49169..fa347b5 100644
+index 99b7028..fd884d5 100644
 --- a/settings.gradle
 +++ b/settings.gradle
-@@ -4,9 +4,10 @@ include 'temporal-serviceclient'
+@@ -4,12 +4,14 @@ include 'temporal-serviceclient'
  include 'temporal-sdk'
  include 'temporal-testing'
  include 'temporal-test-server'
 -// Excluded: not needed by PKWARE consumers (we use OpenTelemetry)
-+// Excluded: superseded by temporal-opentelemetry (native OTel instrumentation)
++// Excluded: superseded by temporal-opentelemetry-tracing (native OTel instrumentation)
  // include 'temporal-opentracing'
  // project(':temporal-opentracing').projectDir = file('contrib/temporal-opentracing')
-+include 'temporal-opentelemetry'
+ // Excluded: upstream OTel stats reporter depends on temporal-opentracing; not needed by PKWARE
+ // include 'temporal-opentelemetry'
+ // project(':temporal-opentelemetry').projectDir = file('contrib/temporal-opentelemetry')
++// PKWARE-added: native OpenTelemetry tracing instrumentation (client + worker interceptors)
++include 'temporal-opentelemetry-tracing'
  // Excluded: uses Jackson's KotlinObjectMapperFactory, not needed by PKWARE consumers
  // include 'temporal-kotlin'
  // include 'temporal-spring-ai'
-diff --git a/temporal-opentelemetry/build.gradle b/temporal-opentelemetry/build.gradle
+diff --git a/temporal-opentelemetry-tracing/build.gradle b/temporal-opentelemetry-tracing/build.gradle
 new file mode 100644
 index 0000000..4c1e270
 --- /dev/null
-+++ b/temporal-opentelemetry/build.gradle
++++ b/temporal-opentelemetry-tracing/build.gradle
 @@ -0,0 +1,20 @@
 +description = '''Temporal Java SDK OpenTelemetry Support Module'''
 +
@@ -131,11 +135,11 @@ index 0000000..4c1e270
 +
 +    testRuntimeOnly group: 'ch.qos.logback', name: 'logback-classic', version: "${logbackVersion}"
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java
 new file mode 100644
 index 0000000..4f6c139
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryClientInterceptor.java
 @@ -0,0 +1,30 @@
 +package io.temporal.opentelemetry;
 +
@@ -167,11 +171,11 @@ index 0000000..4f6c139
 +        next, options, spanFactory, contextAccessor);
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java
 new file mode 100644
 index 0000000..2652a03
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryOptions.java
 @@ -0,0 +1,165 @@
 +package io.temporal.opentelemetry;
 +
@@ -338,11 +342,11 @@ index 0000000..2652a03
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java
 new file mode 100644
 index 0000000..09fbb8a
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetrySpanContextCodec.java
 @@ -0,0 +1,23 @@
 +package io.temporal.opentelemetry;
 +
@@ -367,11 +371,11 @@ index 0000000..09fbb8a
 +
 +  Context decode(Map<String, String> serializedContext, TextMapPropagator propagator);
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java
 new file mode 100644
 index 0000000..1d42758
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/OpenTelemetryWorkerInterceptor.java
 @@ -0,0 +1,40 @@
 +package io.temporal.opentelemetry;
 +
@@ -413,11 +417,11 @@ index 0000000..1d42758
 +        next, options, spanFactory, contextAccessor);
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java
 new file mode 100644
 index 0000000..0210388
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanBuilderProvider.java
 @@ -0,0 +1,12 @@
 +package io.temporal.opentelemetry;
 +
@@ -431,11 +435,11 @@ index 0000000..0210388
 +  io.opentelemetry.api.trace.SpanBuilder createSpanBuilder(
 +      Tracer tracer, SpanCreationContext spanCreationContext);
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java
 new file mode 100644
 index 0000000..6b31477
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanCreationContext.java
 @@ -0,0 +1,111 @@
 +package io.temporal.opentelemetry;
 +
@@ -548,11 +552,11 @@ index 0000000..6b31477
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanOperationType.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanOperationType.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanOperationType.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanOperationType.java
 new file mode 100644
 index 0000000..6371271
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/SpanOperationType.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/SpanOperationType.java
 @@ -0,0 +1,31 @@
 +package io.temporal.opentelemetry;
 +
@@ -585,11 +589,11 @@ index 0000000..6371271
 +    return defaultPrefix;
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/StandardTagNames.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/StandardTagNames.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/StandardTagNames.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/StandardTagNames.java
 new file mode 100644
 index 0000000..9c66759
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/StandardTagNames.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/StandardTagNames.java
 @@ -0,0 +1,12 @@
 +package io.temporal.opentelemetry;
 +
@@ -603,11 +607,11 @@ index 0000000..9c66759
 +
 +  public static final String EVICTED = "evicted";
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java
 new file mode 100644
 index 0000000..4dc9a4c
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapGetter.java
 @@ -0,0 +1,27 @@
 +package io.temporal.opentelemetry.codec;
 +
@@ -636,11 +640,11 @@ index 0000000..4dc9a4c
 +    return carrier.get(key);
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java
 new file mode 100644
 index 0000000..23822e1
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/MapTextMapSetter.java
 @@ -0,0 +1,23 @@
 +package io.temporal.opentelemetry.codec;
 +
@@ -665,11 +669,11 @@ index 0000000..23822e1
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java
 new file mode 100644
 index 0000000..332bdb2
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapCodec.java
 @@ -0,0 +1,32 @@
 +package io.temporal.opentelemetry.codec;
 +
@@ -703,11 +707,11 @@ index 0000000..332bdb2
 +    return propagator.extract(Context.current(), serializedContext, MapTextMapGetter.INSTANCE);
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java
 new file mode 100644
 index 0000000..951941f
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/codec/TextMapInjectExtractCodec.java
 @@ -0,0 +1,35 @@
 +package io.temporal.opentelemetry.codec;
 +
@@ -744,11 +748,11 @@ index 0000000..951941f
 +    return propagator.extract(Context.current(), serializedContext, MapTextMapGetter.INSTANCE);
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java
 new file mode 100644
 index 0000000..b124787
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ActionTypeAndNameSpanBuilderProvider.java
 @@ -0,0 +1,197 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -947,11 +951,11 @@ index 0000000..b124787
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java
 new file mode 100644
 index 0000000..fcc480f
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/ContextAccessor.java
 @@ -0,0 +1,75 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -1028,11 +1032,11 @@ index 0000000..fcc480f
 +    return propagator.extract(Context.current(), header, MapTextMapGetter.INSTANCE);
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java
 new file mode 100644
 index 0000000..09f9e5a
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryActivityInboundCallsInterceptor.java
 @@ -0,0 +1,71 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -1105,11 +1109,11 @@ index 0000000..09f9e5a
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java
 new file mode 100644
 index 0000000..bf7c31d
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryNexusOperationInboundCallsInterceptor.java
 @@ -0,0 +1,77 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -1188,11 +1192,11 @@ index 0000000..bf7c31d
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java
 new file mode 100644
 index 0000000..8888e38
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowClientCallsInterceptor.java
 @@ -0,0 +1,125 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -1319,11 +1323,11 @@ index 0000000..8888e38
 +        tracer, operationType, input.getWorkflowType(), input.getOptions().getWorkflowId());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java
 new file mode 100644
 index 0000000..39556c8
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowInboundCallsInterceptor.java
 @@ -0,0 +1,152 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -1477,11 +1481,11 @@ index 0000000..39556c8
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java
 new file mode 100644
 index 0000000..c8ac379
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/OpenTelemetryWorkflowOutboundCallsInterceptor.java
 @@ -0,0 +1,250 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -1733,11 +1737,11 @@ index 0000000..c8ac379
 +        continuedWorkflowInfo.getRunId());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java
+diff --git a/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java
 new file mode 100644
 index 0000000..1b87a21
 --- /dev/null
-+++ b/temporal-opentelemetry/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java
++++ b/temporal-opentelemetry-tracing/src/main/java/io/temporal/opentelemetry/internal/SpanFactory.java
 @@ -0,0 +1,254 @@
 +package io.temporal.opentelemetry.internal;
 +
@@ -1993,11 +1997,11 @@ index 0000000..1b87a21
 +    return builder;
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java
 new file mode 100644
 index 0000000..b3ff369
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ActivityFailureTest.java
 @@ -0,0 +1,282 @@
 +package io.temporal.opentelemetry;
 +
@@ -2281,11 +2285,11 @@ index 0000000..b3ff369
 +    assertEquals(StatusCode.UNSET, thirdAttemptSpan.getStatus().getStatusCode());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java
 new file mode 100644
 index 0000000..7aac94a
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncChildWorkflowTest.java
 @@ -0,0 +1,163 @@
 +package io.temporal.opentelemetry;
 +
@@ -2450,11 +2454,11 @@ index 0000000..7aac94a
 +    assertEquals("RunWorkflow:ChildWorkflow", childWorkflowRunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java
 new file mode 100644
 index 0000000..a4097d4
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/AsyncLambdaTest.java
 @@ -0,0 +1,146 @@
 +package io.temporal.opentelemetry;
 +
@@ -2602,11 +2606,11 @@ index 0000000..a4097d4
 +        workflowChildren.size());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java
 new file mode 100644
 index 0000000..d7530e9
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CallbackContextTest.java
 @@ -0,0 +1,169 @@
 +package io.temporal.opentelemetry;
 +
@@ -2777,11 +2781,11 @@ index 0000000..d7530e9
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java
 new file mode 100644
 index 0000000..df9545d
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ContinueAsNewTest.java
 @@ -0,0 +1,144 @@
 +package io.temporal.opentelemetry;
 +
@@ -2927,11 +2931,11 @@ index 0000000..df9545d
 +    assertEquals("RunWorkflow:TestWorkflow", continueAsNewRunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java
 new file mode 100644
 index 0000000..2516d9f
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/CustomSpanNamingTest.java
 @@ -0,0 +1,234 @@
 +package io.temporal.opentelemetry;
 +
@@ -3167,11 +3171,11 @@ index 0000000..2516d9f
 +        activitySuccessfulRunSpan.getAttributes().get(AttributeKey.stringKey("resource.name")));
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java
 new file mode 100644
 index 0000000..5a97522
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/ExceptionIgnoredTest.java
 @@ -0,0 +1,190 @@
 +package io.temporal.opentelemetry;
 +
@@ -3363,11 +3367,11 @@ index 0000000..5a97522
 +    assertEquals("RunActivity:Activity", successfulActivityRunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java
 new file mode 100644
 index 0000000..58caf06
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/LocalActivityTest.java
 @@ -0,0 +1,141 @@
 +package io.temporal.opentelemetry;
 +
@@ -3510,11 +3514,11 @@ index 0000000..58caf06
 +    assertEquals("RunActivity:Activity", activityRunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java
 new file mode 100644
 index 0000000..f63903b
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NexusOperationTest.java
 @@ -0,0 +1,200 @@
 +package io.temporal.opentelemetry;
 +
@@ -3716,11 +3720,11 @@ index 0000000..f63903b
 +    assertEquals("RunWorkflow:TestOtherWorkflow", otherWorkflowRunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java
 new file mode 100644
 index 0000000..4753af0
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/NoClientSpanTest.java
 @@ -0,0 +1,81 @@
 +package io.temporal.opentelemetry;
 +
@@ -3803,11 +3807,11 @@ index 0000000..4753af0
 +    assertEquals("bar", workflow.workflow("input"));
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java
 new file mode 100644
 index 0000000..f1f284f
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetryBaseTest.java
 @@ -0,0 +1,55 @@
 +package io.temporal.opentelemetry;
 +
@@ -3864,11 +3868,11 @@ index 0000000..f1f284f
 +    spanExporter.reset();
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java
 new file mode 100644
 index 0000000..313d186
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/OpenTelemetrySpansHelper.java
 @@ -0,0 +1,128 @@
 +package io.temporal.opentelemetry;
 +
@@ -3998,11 +4002,11 @@ index 0000000..313d186
 +        .collect(Collectors.toList());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java
 new file mode 100644
 index 0000000..653cb60
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SignalWithStartTest.java
 @@ -0,0 +1,139 @@
 +package io.temporal.opentelemetry;
 +
@@ -4143,11 +4147,11 @@ index 0000000..653cb60
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java
 new file mode 100644
 index 0000000..f0094cd
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/SpanContextPropagationTest.java
 @@ -0,0 +1,160 @@
 +package io.temporal.opentelemetry;
 +
@@ -4309,11 +4313,11 @@ index 0000000..f0094cd
 +    assertEquals("RunActivity:Activity1", activityRunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java
 new file mode 100644
 index 0000000..02f00d5
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestOpenTelemetrySpanBuilderProvider.java
 @@ -0,0 +1,43 @@
 +package io.temporal.opentelemetry;
 +
@@ -4358,11 +4362,11 @@ index 0000000..02f00d5
 +    return tags;
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java
 new file mode 100644
 index 0000000..5d0a38a
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/TestSpanBuilderProvider.java
 @@ -0,0 +1,39 @@
 +package io.temporal.opentelemetry;
 +
@@ -4403,11 +4407,11 @@ index 0000000..5d0a38a
 +    }
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java
 new file mode 100644
 index 0000000..5b8db00
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowReplayTest.java
 @@ -0,0 +1,203 @@
 +package io.temporal.opentelemetry;
 +
@@ -4612,11 +4616,11 @@ index 0000000..5b8db00
 +    assertEquals("RunActivity:Activity2", activity2RunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java
 new file mode 100644
 index 0000000..6614318
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/WorkflowRetryTest.java
 @@ -0,0 +1,214 @@
 +package io.temporal.opentelemetry;
 +
@@ -4832,11 +4836,11 @@ index 0000000..6614318
 +    assertEquals("RunActivity:Activity2", activity2RunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java
 new file mode 100644
 index 0000000..c44487a
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/integration/OTLPTest.java
 @@ -0,0 +1,211 @@
 +package io.temporal.opentelemetry.integration;
 +
@@ -5049,11 +5053,11 @@ index 0000000..c44487a
 +    assertEquals("RunWorkflow:TestWorkflow", workflowRunSpan.getName());
 +  }
 +}
-diff --git a/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
+diff --git a/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
 new file mode 100644
 index 0000000..d43cdca
 --- /dev/null
-+++ b/temporal-opentelemetry/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
++++ b/temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
 @@ -0,0 +1,114 @@
 +package io.temporal.opentelemetry.worker;
 +
