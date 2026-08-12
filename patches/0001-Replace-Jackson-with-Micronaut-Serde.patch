@@ -1,4 +1,4 @@
-From 408fb99b7d0bb72142deefe4c75b78814e2694b4 Mon Sep 17 00:00:00 2001
+From 6633b3c2472832cfefadcfce5545949de041c330 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -16,6 +16,13 @@ Bumps the build to JDK 25 / Gradle 9 (Serde 3.x requires JVM 17+):
 wrapper 9.6.1, --release 25, Mockito 5.23.0, logback 1.5.18 (slf4j 2.0),
 Error Prone disabled on the 25 modules. Removes jackson-databind, moshi,
 and okio from the runtime classpath.
+
+Also unmasks VersionStateMachineTest, previously excluded from
+:temporal-sdk:test because Moshi could not resolve AsyncWorkflowBuilder$Pair's
+bare type variables (T1, T2): under Serde, Pair gets the getter-based
+@Serdeable + @JsonCreator shape already used for other test-only DTOs in
+this series, so DataConverter can serialize it and all 21 tests run in the
+normal suite.
 ---
  build.gradle                                  |  12 +-
  contrib/temporal-workflowstreams/build.gradle |   8 +-
@@ -33,7 +40,7 @@ and okio from the runtime classpath.
  settings.gradle                               |  32 +-
  temporal-bom/build.gradle                     |   9 -
  temporal-remote-data-encoder/build.gradle     |   2 +-
- temporal-sdk/build.gradle                     | 108 +------
+ temporal-sdk/build.gradle                     | 105 +-----
  .../Jackson3JsonPayloadConverterTest.java     | 216 -------------
  .../common/converter/CodecDataConverter.java  |  25 +-
  .../common/converter/DataConverter.java       |   4 +-
@@ -43,20 +50,22 @@ and okio from the runtime classpath.
  .../Jackson3JsonPayloadConverter.java         |  50 ---
  .../JacksonJsonPayloadConverter.java          | 141 --------
  .../MicronautSerdePayloadConverter.java       | 118 +++++++
- .../converter/OperationTokenTypeSerde.java    |  39 +++
+ .../converter/OperationTokenTypeSerde.java    | 100 ++++++
  .../PayloadAndFailureDataConverter.java       |   8 +
  .../common/converter/PayloadConverter.java    |   4 +-
  .../temporal/failure/ApplicationFailure.java  |   2 +-
+ .../client/RootActivityClientInvoker.java     |   2 +-
  .../internal/common/InternalUtils.java        |   4 +-
  .../internal/common/NexusFailureInfoJson.java |  15 +
  .../temporal/internal/common/NexusUtil.java   |  25 +-
  .../SearchAttributePayloadConverter.java      |  19 ++
  .../history/LocalActivityMarkerMetadata.java  |  19 +-
  .../internal/nexus/NexusTaskHandlerImpl.java  |   2 +-
- .../internal/nexus/OperationToken.java        |  26 +-
+ .../internal/nexus/OperationToken.java        |  40 ++-
  .../internal/nexus/OperationTokenType.java    |   5 -
- .../internal/nexus/OperationTokenUtil.java    |  28 +-
+ .../internal/nexus/OperationTokenUtil.java    |  52 +--
  .../sync/WorkflowRetryerInternal.java         |  17 +-
+ .../nexus/TemporalNexusClientImpl.java        |   6 +-
  .../temporal/payload/codec/PayloadCodec.java  |   4 +-
  .../Jackson3JsonPayloadConverter.java         | 134 --------
  .../ActivityHeartbeatThrottlingTest.java      |   4 +-
@@ -69,21 +78,23 @@ and okio from the runtime classpath.
  .../common/converter/SerdeIsolationTest.java  |  74 +++++
  .../OptionalJsonSerializationTest.java        |   1 +
  ...alActivityMarkerMetadataRoundTripTest.java |  29 ++
- .../internal/nexus/WorkflowRunTokenTest.java  |  48 ++-
+ .../internal/nexus/OperationTokenTest.java    | 214 ++++++++++--
+ .../internal/nexus/UpdateRunTokenTest.java    |  21 +-
+ .../statemachines/AsyncWorkflowBuilder.java   |  14 +-
  .../VersionStateMachineTest.java              |   2 +-
  ...SerializableRetryOptionsRoundTripTest.java |  39 +++
  .../io/temporal/worker/StickyWorkerTest.java  |  11 +
  .../io/temporal/worker/WorkerStressTests.java |   8 +
- .../java/io/temporal/workflow/MemoTest.java   |   2 +-
  .../nexus/OperationFailMetricTest.java        |   2 +-
  .../TerminateWorkflowAsyncOperationTest.java  |  28 +-
+ .../nexus/UpdateWorkflowOperationTest.java    |  19 +-
  .../updateTest/SpeculativeUpdateTest.java     |   2 +-
  .../WorkerWithVirtualThreadsStressTests.java  |   8 +
  temporal-serviceclient/build.gradle           |  17 +-
  temporal-test-server/build.gradle             |  15 +-
  .../testservice/TestVisibilityStoreImpl.java  |  49 +++
  temporal-testing/build.gradle                 |   2 +
- 66 files changed, 1124 insertions(+), 1032 deletions(-)
+ 70 files changed, 1410 insertions(+), 1068 deletions(-)
  create mode 100644 gradle.properties
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
@@ -102,7 +113,7 @@ and okio from the runtime classpath.
  create mode 100644 temporal-sdk/src/test/java/io/temporal/internal/sync/SerializableRetryOptionsRoundTripTest.java
 
 diff --git a/build.gradle b/build.gradle
-index 6dcbcc7..15bdcdd 100644
+index e9bbe42..a0074fa 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -1,6 +1,6 @@
@@ -462,7 +473,7 @@ index f7cae3b..418936d 100644
  }
  
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index d7b090e..2008313 100644
+index d7b090e..7c81be2 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -2,7 +2,6 @@ description = '''Temporal Workflow Java SDK'''
@@ -574,12 +585,10 @@ index d7b090e..2008313 100644
  task registerNamespace(type: JavaExec) {
      getMainClass().set('io.temporal.internal.docker.RegisterTestNamespace')
      classpath = sourceSets.test.runtimeClasspath
-@@ -152,20 +112,9 @@ test {
-     useJUnit {
-         excludeCategories 'io.temporal.worker.IndependentResourceBasedTests'
+@@ -154,20 +114,6 @@ test {
      }
--}
--
+ }
+ 
 -// On Java 17+, prepend java17 classes to all test classpaths so that Class.forName finds
 -// the real Jackson3JsonPayloadConverter instead of the Java 8 stub. This lets us test
 -// the present-java17-but-absent-jackson3 behavior (NoClassDefFoundError) in the same
@@ -592,13 +601,12 @@ index d7b090e..2008313 100644
 -            classpath = files(sourceSets.java17.output.classesDirs) + classpath
 -        }
 -    }
-+    // AsyncWorkflowBuilder$Pair uses bare type variables (T1, T2) that Moshi cannot resolve.
-+    // Pair is test-only infrastructure. Version state machine logic is covered by other tests.
-+    exclude '**/VersionStateMachineTest.class'
- }
- 
+-}
+-
  task testResourceIndependent(type: Test) {
-@@ -207,41 +156,11 @@ testing {
+     useJUnit {
+         includeCategories 'io.temporal.worker.IndependentResourceBasedTests'
+@@ -207,41 +153,11 @@ testing {
              }
          }
  
@@ -643,7 +651,7 @@ index d7b090e..2008313 100644
              targets {
                  all {
                      testTask.configure {
-@@ -285,6 +204,5 @@ testing {
+@@ -285,6 +201,5 @@ testing {
  }
  
  tasks.named('check') {
@@ -1387,10 +1395,10 @@ index 0000000..824d6ae
 +}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java b/temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java
 new file mode 100644
-index 0000000..5ac97b7
+index 0000000..3b90276
 --- /dev/null
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,100 @@
 +package io.temporal.common.converter;
 +
 +import io.micronaut.core.type.Argument;
@@ -1400,6 +1408,9 @@ index 0000000..5ac97b7
 +import io.temporal.internal.nexus.OperationTokenType;
 +import jakarta.inject.Singleton;
 +import java.io.IOException;
++import java.math.BigInteger;
++import java.util.List;
++import java.util.Map;
 +
 +/**
 + * Serializes {@link OperationTokenType} as its integer value (e.g. {@code "t":1}) for SDK-internal
@@ -1427,7 +1438,65 @@ index 0000000..5ac97b7
 +  @Override
 +  public OperationTokenType deserialize(
 +      Decoder decoder, DecoderContext context, Argument<? super Object> type) throws IOException {
-+    return OperationTokenType.fromValue(decoder.decodeInt());
++    // decoder.decodeInt() would silently coerce a JSON boolean into 0/1 and silently truncate an
++    // out-of-int-range integral value, both of which diverge from upstream Jackson's Integer
++    // coercion. decodeArbitrary() preserves the JSON value's real type (Boolean, Number, String,
++    // ...) so we can replicate Jackson's coercion table exactly:
++    //  - Boolean:            reject (the one place we intentionally beat upstream's own coercion)
++    //  - integral Number:    accept only if it fits in an int, else reject as out-of-range
++    //  - floating Number:    truncate toward zero into an int, as Jackson does
++    //  - String:             parse as an integer, reject if unparseable
++    //  - anything else:      reject
++    Object value = decoder.decodeArbitrary();
++    if (value == null) {
++      return null;
++    }
++    return OperationTokenType.fromValue(toIntValue(value));
++  }
++
++  private static int toIntValue(Object value) {
++    if (value instanceof Boolean) {
++      throw new IllegalArgumentException(
++          "Cannot deserialize value of type Integer from Boolean value: " + value);
++    }
++    if (value instanceof Integer) {
++      return (Integer) value;
++    }
++    if (value instanceof Long || value instanceof BigInteger) {
++      return intValueExact((Number) value);
++    }
++    if (value instanceof Number) {
++      // Floating-point ("t":1.0, "t":1.5, "t":1e0): Jackson truncates toward zero when coercing
++      // into an Integer field rather than rejecting a non-whole number.
++      return ((Number) value).intValue();
++    }
++    if (value instanceof String) {
++      try {
++        return Integer.parseInt(((String) value).trim());
++      } catch (NumberFormatException e) {
++        throw new IllegalArgumentException(
++            "Cannot deserialize value of type Integer from String \""
++                + value
++                + "\": not a valid Integer value");
++      }
++    }
++    String shape =
++        value instanceof Map ? "Object" : value instanceof List ? "Array" : value.toString();
++    throw new IllegalArgumentException(
++        "Cannot deserialize value of type Integer from " + shape + " value: " + value);
++  }
++
++  private static final BigInteger INT_MIN = BigInteger.valueOf(Integer.MIN_VALUE);
++  private static final BigInteger INT_MAX = BigInteger.valueOf(Integer.MAX_VALUE);
++
++  /** Rejects a Long/BigInteger that doesn't fit in an int rather than silently truncating it. */
++  private static int intValueExact(Number value) {
++    BigInteger big =
++        value instanceof BigInteger ? (BigInteger) value : BigInteger.valueOf(value.longValue());
++    if (big.compareTo(INT_MIN) < 0 || big.compareTo(INT_MAX) > 0) {
++      throw new IllegalArgumentException("Numeric value (" + value + ") out of range of int");
++    }
++    return big.intValue();
 +  }
 +}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java
@@ -1483,8 +1552,21 @@ index 91d496b..7365e79 100644
            cause,
            nextRetryDelay,
            category == null ? ApplicationErrorCategory.UNSPECIFIED : category);
+diff --git a/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java b/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
+index 3d4b115..814a052 100644
+--- a/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
++++ b/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
+@@ -132,7 +132,7 @@ public class RootActivityClientInvoker implements ActivityClientCallsInterceptor
+         nexusOperationMetadata.operationToken =
+             io.temporal.internal.nexus.OperationTokenUtil.generateActivityExecutionOperationToken(
+                 options.getId(), clientOptions.getNamespace());
+-      } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
++      } catch (java.io.IOException e) {
+         throw new io.nexusrpc.handler.HandlerException(
+             io.nexusrpc.handler.HandlerException.ErrorType.BAD_REQUEST,
+             "failed to generate activity operation token",
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java b/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
-index 72987e3..1319588 100644
+index 08679ca..44ef5be 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/common/InternalUtils.java
 @@ -1,6 +1,5 @@
@@ -1677,10 +1759,10 @@ index 03e00f9..b67507b 100644
  
    public LocalActivityMarkerMetadata() {}
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
-index adaecca..25aa6e4 100644
+index 92af2f6..55532b6 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
-@@ -370,7 +370,7 @@ public class NexusTaskHandlerImpl implements NexusTaskHandler {
+@@ -372,7 +372,7 @@ public class NexusTaskHandlerImpl implements NexusTaskHandler {
          temporalFailure.setStackTrace(e.getStackTrace());
        } else if (e.getState() == OperationState.CANCELED) {
          temporalFailure =
@@ -1690,24 +1772,33 @@ index adaecca..25aa6e4 100644
        } else {
          throw new HandlerException(
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
-index 4bd5635..c0ef4f0 100644
+index 176168a..da158dc 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
-@@ -1,15 +1,21 @@
+@@ -1,19 +1,36 @@
  package io.temporal.internal.nexus;
  
-+import com.fasterxml.jackson.annotation.JsonCreator;
+ import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  import com.fasterxml.jackson.annotation.JsonInclude;
  import com.fasterxml.jackson.annotation.JsonProperty;
+-
+-/** Deserialized representation of a Nexus operation token. */
 +import io.micronaut.serde.annotation.Serdeable;
 +import io.temporal.common.converter.OperationTokenTypeSerde;
- 
- /** Deserialized representation of a Nexus operation token. */
++
++/**
++ * Deserialized representation of a Nexus operation token.
++ *
++ * <p>{@code ignoreUnknown = false} matches upstream's default Jackson behavior: these are cross-SDK
++ * wire tokens, so an unrecognized field must fail parsing rather than be silently dropped
++ * (Micronaut Serde's global default is to ignore unknown properties).
++ */
 +@Serdeable
-+@JsonInclude(JsonInclude.Include.NON_NULL)
++@JsonIgnoreProperties(ignoreUnknown = false)
  public class OperationToken {
    @JsonProperty("v")
--  @JsonInclude(JsonInclude.Include.NON_NULL)
+   @JsonInclude(JsonInclude.Include.NON_NULL)
    private final Integer version;
  
    @JsonProperty("t")
@@ -1715,40 +1806,60 @@ index 4bd5635..c0ef4f0 100644
 +  @Serdeable.Deserializable(using = OperationTokenTypeSerde.class)
    private final OperationTokenType type;
  
++  // Micronaut Serde's global default inclusion is NON_EMPTY (not upstream Jackson's implicit
++  // ALWAYS), so an unannotated field silently drops null/empty values. ALWAYS restores upstream's
++  // behavior of emitting an explicit "ns":null rather than omitting the property.
    @JsonProperty("ns")
-@@ -18,22 +24,20 @@ public class OperationToken {
-   @JsonProperty("wid")
-   private final String workflowId;
++  @JsonInclude(JsonInclude.Include.ALWAYS)
+   private final String namespace;
  
-+  public OperationToken(OperationTokenType type, String namespace, String workflowId) {
-+    this(null, type, namespace, workflowId);
-+  }
-+
-+  @JsonCreator
+   @JsonProperty("wid")
+@@ -34,14 +51,17 @@ public class OperationToken {
+ 
+   @JsonCreator
    public OperationToken(
 -      @JsonProperty("t") Integer type,
-+      @JsonProperty("v") Integer version,
 +      @JsonProperty("t") OperationTokenType type,
        @JsonProperty("ns") String namespace,
--      @JsonProperty("wid") String workflowId,
--      @JsonProperty("v") Integer version) {
+       @JsonProperty("wid") String workflowId,
+       @JsonProperty("aid") String activityId,
+       @JsonProperty("rid") String runId,
+       @JsonProperty("uid") String updateId,
+       @JsonProperty("v") Integer version) {
 -    this.type = OperationTokenType.fromValue(type);
--    this.namespace = namespace;
--    this.workflowId = workflowId;
-+      @JsonProperty("wid") String workflowId) {
-     this.version = version;
--  }
--
--  public OperationToken(OperationTokenType type, String namespace, String workflowId) {
-     this.type = type;
++    // A missing or explicit-null "t" must normalize to UNKNOWN, matching upstream's
++    // OperationTokenType.fromValue(null) behavior, so getType() is never null and callers'
++    // switch/equals checks on the type reliably throw IllegalArgumentException instead of NPE.
++    this.type = type != null ? type : OperationTokenType.UNKNOWN;
      this.namespace = namespace;
      this.workflowId = workflowId;
--    this.version = null;
+     this.activityId = activityId;
+@@ -108,10 +128,6 @@ public class OperationToken {
+     return workflowId;
    }
  
-   public Integer getVersion() {
+-  public String getUpdateId() {
+-    return updateId;
+-  }
+-
+   public String getActivityId() {
+     return activityId;
+   }
+@@ -125,4 +141,12 @@ public class OperationToken {
+   public String getRunId() {
+     return runId;
+   }
++
++  // Micronaut Serde orders serialized properties by getter declaration order, not field
++  // declaration order or @JsonCreator parameter order. getUpdateId() must stay declared after
++  // getRunId() so workflow-update tokens serialize as {"t":...,"ns":...,"wid":...,"rid":...,
++  // "uid":...} byte-identically with upstream's field-order-driven Jackson output.
++  public String getUpdateId() {
++    return updateId;
++  }
+ }
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenType.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenType.java
-index 11aa57a..46c7534 100644
+index a7afe11..ea252b5 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenType.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenType.java
 @@ -1,8 +1,5 @@
@@ -1759,8 +1870,8 @@ index 11aa57a..46c7534 100644
 -
  public enum OperationTokenType {
    UNKNOWN(0),
-   WORKFLOW_RUN(1);
-@@ -13,12 +10,10 @@ public enum OperationTokenType {
+   WORKFLOW_RUN(1),
+@@ -15,12 +12,10 @@ public enum OperationTokenType {
      this.value = i;
    }
  
@@ -1774,7 +1885,7 @@ index 11aa57a..46c7534 100644
      if (value == null) {
        return UNKNOWN;
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
-index 737a84a..367b045 100644
+index a97d75c..64fbb07 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
 @@ -1,16 +1,12 @@
@@ -1809,7 +1920,7 @@ index 737a84a..367b045 100644
      } catch (Exception e) {
        throw new IllegalArgumentException("Failed to parse operation token: " + e.getMessage());
      }
-@@ -45,7 +42,7 @@ public class OperationTokenUtil {
+@@ -61,7 +58,7 @@ public class OperationTokenUtil {
     */
    public static OperationToken loadWorkflowRunOperationToken(String operationToken) {
      OperationToken token = loadOperationToken(operationToken);
@@ -1818,7 +1929,7 @@ index 737a84a..367b045 100644
        throw new IllegalArgumentException(
            "Invalid workflow run token: incorrect operation token type: " + token.getType());
      }
-@@ -63,11 +60,12 @@ public class OperationTokenUtil {
+@@ -123,17 +120,17 @@ public class OperationTokenUtil {
  
    /** Generate a workflow run operation token from a workflow ID and namespace. */
    public static String generateWorkflowRunOperationToken(String workflowId, String namespace)
@@ -1832,6 +1943,55 @@ index 737a84a..367b045 100644
 +        InternalSerdeMapper.get()
 +            .writeValueAsBytes(
 +                new OperationToken(OperationTokenType.WORKFLOW_RUN, namespace, workflowId));
++    return encoder.encodeToString(json);
+   }
+ 
+   /** Generate a workflow update operation token from namespace, workflowId, runId, updateId */
+   public static String generateWorkflowUpdateOperationToken(
+-      String namespace, String workflowId, String runId, String updateId)
+-      throws JsonProcessingException {
++      String namespace, String workflowId, String runId, String updateId) throws IOException {
+     if (Strings.isNullOrEmpty(namespace)) {
+       throw new IllegalArgumentException("Invalid workflow update token: missing namespace(ns)");
+     }
+@@ -145,8 +142,10 @@ public class OperationTokenUtil {
+       throw new IllegalArgumentException("Invalid workflow update token: missing update ID (uid)");
+     }
+     runId = Strings.emptyToNull(runId); // empty runId is allowed but should not be serialized
+-    String json = ow.writeValueAsString(new OperationToken(namespace, workflowId, runId, updateId));
+-    return encoder.encodeToString(json.getBytes());
++    byte[] json =
++        InternalSerdeMapper.get()
++            .writeValueAsBytes(new OperationToken(namespace, workflowId, runId, updateId));
++    return encoder.encodeToString(json);
+   }
+ 
+   /**
+@@ -157,7 +156,7 @@ public class OperationTokenUtil {
+    * yet known.
+    */
+   public static String generateActivityExecutionOperationToken(String activityId, String namespace)
+-      throws JsonProcessingException {
++      throws IOException {
+     return generateActivityExecutionOperationToken(activityId, null, namespace);
+   }
+ 
+@@ -171,12 +170,13 @@ public class OperationTokenUtil {
+    * #generateActivityExecutionOperationToken(String, String)} for that path.
+    */
+   public static String generateActivityExecutionOperationToken(
+-      String activityId, String runId, String namespace) throws JsonProcessingException {
+-    String json =
+-        ow.writeValueAsString(
+-            new OperationToken(
+-                OperationTokenType.ACTIVITY_EXECUTION, namespace, null, activityId, runId));
+-    return encoder.encodeToString(json.getBytes());
++      String activityId, String runId, String namespace) throws IOException {
++    byte[] json =
++        InternalSerdeMapper.get()
++            .writeValueAsBytes(
++                new OperationToken(
++                    OperationTokenType.ACTIVITY_EXECUTION, namespace, null, activityId, runId));
 +    return encoder.encodeToString(json);
    }
  
@@ -1878,6 +2038,43 @@ index ecf31fd..dd92af0 100644
        this.initialIntervalMillis = initialIntervalMillis;
        this.backoffCoefficient = backoffCoefficient;
        this.maximumAttempts = maximumAttempts;
+diff --git a/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java b/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java
+index d962d38..6fd5af4 100644
+--- a/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java
++++ b/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java
+@@ -1,6 +1,5 @@
+ package io.temporal.nexus;
+ 
+-import com.fasterxml.jackson.core.JsonProcessingException;
+ import com.google.common.base.Strings;
+ import io.nexusrpc.OperationException;
+ import io.nexusrpc.handler.HandlerException;
+@@ -36,6 +35,7 @@ import io.temporal.internal.nexus.OperationToken;
+ import io.temporal.internal.nexus.OperationTokenUtil;
+ import io.temporal.internal.util.MethodExtractor;
+ import io.temporal.workflow.Functions;
++import java.io.IOException;
+ import java.lang.reflect.Method;
+ import java.lang.reflect.Type;
+ import java.util.Arrays;
+@@ -593,7 +593,7 @@ final class TemporalNexusClientImpl implements TemporalNexusClient {
+                 ot.getWorkflowId(),
+                 handle.getExecution().getRunId(),
+                 ot.getUpdateId());
+-      } catch (IllegalArgumentException | JsonProcessingException e) {
++      } catch (IllegalArgumentException | IOException e) {
+         // should not happen, this is all in SDK
+         throw new HandlerException(
+             HandlerException.ErrorType.INTERNAL, "unexpected error reconstructing token", e);
+@@ -1148,7 +1148,7 @@ final class TemporalNexusClientImpl implements TemporalNexusClient {
+                           out.getActivityId(),
+                           out.getActivityRunId(),
+                           client.getOptions().getNamespace());
+-                } catch (JsonProcessingException e) {
++                } catch (IOException e) {
+                   throw new HandlerException(
+                       HandlerException.ErrorType.INTERNAL,
+                       "failed to generate activity operation token",
 diff --git a/temporal-sdk/src/main/java/io/temporal/payload/codec/PayloadCodec.java b/temporal-sdk/src/main/java/io/temporal/payload/codec/PayloadCodec.java
 index ef164d3..617736c 100644
 --- a/temporal-sdk/src/main/java/io/temporal/payload/codec/PayloadCodec.java
@@ -2913,22 +3110,24 @@ index 0000000..de185ab
 +    assertEquals(Duration.ofMillis(2000), back.getBackoff());
 +  }
 +}
-diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java
-index 1f22fe8..e55aa7b 100644
---- a/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java
-+++ b/temporal-sdk/src/test/java/io/temporal/internal/nexus/WorkflowRunTokenTest.java
-@@ -1,55 +1,45 @@
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java
+index a95cf90..f210703 100644
+--- a/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java
+@@ -1,19 +1,15 @@
  package io.temporal.internal.nexus;
  
 -import com.fasterxml.jackson.core.JsonProcessingException;
 -import com.fasterxml.jackson.databind.*;
 -import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
++import io.micronaut.core.type.Argument;
++import io.temporal.common.converter.InternalSerdeMapper;
  import java.io.IOException;
  import java.util.Base64;
  import org.junit.Assert;
  import org.junit.Test;
  
- public class WorkflowRunTokenTest {
+ public class OperationTokenTest {
 -  private static final ObjectWriter ow =
 -      new ObjectMapper().registerModule(new Jdk8Module()).writer();
 -  private static final ObjectReader or =
@@ -2937,42 +3136,75 @@ index 1f22fe8..e55aa7b 100644
 +  private static final Base64.Decoder decoder = Base64.getUrlDecoder();
  
    @Test
+   public void operationTokenTypeValues() {
+@@ -24,39 +20,66 @@ public class OperationTokenTest {
+   }
+ 
+   @Test
 -  public void serializeWorkflowRunToken() throws JsonProcessingException {
--    OperationToken token =
--        new OperationToken(OperationTokenType.WORKFLOW_RUN, "namespace", "workflowId");
--    String json = ow.writeValueAsString(token);
--    final JsonNode node = new ObjectMapper().readTree(json);
 +  public void serializeWorkflowRunToken() throws IOException {
 +    String operationToken =
 +        OperationTokenUtil.generateWorkflowRunOperationToken("workflowId", "namespace");
 +    String json = new String(decoder.decode(operationToken));
-     System.out.println(json);
++    Assert.assertTrue(json.contains("\"t\":1"));
++    Assert.assertTrue(json.contains("\"ns\":\"namespace\""));
++    Assert.assertTrue(json.contains("\"wid\":\"workflowId\""));
++    // null version must be omitted, not emitted as "v":null
++    Assert.assertFalse(json.contains("\"v\":"));
++  }
++
++  @Test
++  public void nullNamespaceSerializesAsExplicitNull() throws IOException {
++    // Micronaut Serde's global default inclusion is NON_EMPTY, unlike upstream Jackson's implicit
++    // ALWAYS, so an unannotated field would silently drop a null/empty "ns" instead of emitting it
++    // explicitly. @JsonInclude(ALWAYS) on the namespace field restores upstream's byte shape.
++    String encoded = OperationTokenUtil.generateWorkflowRunOperationToken("wid1", null);
++    Assert.assertEquals(
++        "{\"t\":1,\"ns\":null,\"wid\":\"wid1\"}", new String(decoder.decode(encoded)));
++  }
++
++  @Test
++  public void emptyNamespaceSerializesAsExplicitEmptyString() throws IOException {
++    String encoded = OperationTokenUtil.generateWorkflowRunOperationToken("wid1", "");
++    Assert.assertEquals(
++        "{\"t\":1,\"ns\":\"\",\"wid\":\"wid1\"}", new String(decoder.decode(encoded)));
++  }
++
++  @Test
++  public void deserializeWorkflowRunTokenWithVersion() {
++    String json = "{\"t\":1,\"ns\":\"namespace\",\"wid\":\"workflowId\",\"v\":0}";
+     OperationToken token =
+-        new OperationToken(OperationTokenType.WORKFLOW_RUN, "namespace", "workflowId");
+-    String json = ow.writeValueAsString(token);
+-    final JsonNode node = new ObjectMapper().readTree(json);
 -    // Assert that the serialized JSON is as expected
 -    Assert.assertEquals(1, node.get("t").asInt());
 -    Assert.assertEquals("namespace", node.get("ns").asText());
 -    Assert.assertEquals("workflowId", node.get("wid").asText());
 -    // Version field should not be serialized as it is null
 -    Assert.assertFalse(node.has("v"));
-+    Assert.assertTrue(json.contains("\"t\":1"));
-+    Assert.assertTrue(json.contains("\"ns\":\"namespace\""));
-+    Assert.assertTrue(json.contains("\"wid\":\"workflowId\""));
-+    // null version must be omitted, not emitted as "v":null
-+    Assert.assertFalse(json.contains("\"v\":"));
++        OperationTokenUtil.loadOperationToken(encoder.encodeToString(json.getBytes()));
++    Assert.assertEquals(OperationTokenType.WORKFLOW_RUN, token.getType());
++    Assert.assertEquals(Integer.valueOf(0), token.getVersion());
++    Assert.assertEquals("namespace", token.getNamespace());
++    Assert.assertEquals("workflowId", token.getWorkflowId());
    }
  
    @Test
 -  public void deserializeWorkflowRunTokenWithVersion() throws IOException {
--    String json = "{\"t\":1,\"ns\":\"namespace\",\"wid\":\"workflowId\",\"v\":1}";
++  public void deserializeTokenWithNonZeroVersion() throws IOException {
++    // loadOperationToken rejects any non-zero "v", so this exercises the raw Serde round trip
++    // directly (no jackson-databind) to prove a non-zero version still deserializes into the
++    // field correctly, matching upstream's equivalent direct-ObjectMapper test.
+     String json = "{\"t\":1,\"ns\":\"namespace\",\"wid\":\"workflowId\",\"v\":1}";
 -    JavaType reference = new ObjectMapper().getTypeFactory().constructType(OperationToken.class);
 -    OperationToken token = new ObjectMapper().readValue(json.getBytes(), reference);
 -    // Assert that the serialized JSON is as expected
-+  public void deserializeWorkflowRunTokenWithVersion() {
-+    String json = "{\"t\":1,\"ns\":\"namespace\",\"wid\":\"workflowId\",\"v\":0}";
 +    OperationToken token =
-+        OperationTokenUtil.loadOperationToken(encoder.encodeToString(json.getBytes()));
++        InternalSerdeMapper.get().readValue(json.getBytes(), Argument.of(OperationToken.class));
      Assert.assertEquals(OperationTokenType.WORKFLOW_RUN, token.getType());
 -    Assert.assertEquals(new Integer(1), token.getVersion());
-+    Assert.assertEquals(Integer.valueOf(0), token.getVersion());
++    Assert.assertEquals(Integer.valueOf(1), token.getVersion());
      Assert.assertEquals("namespace", token.getNamespace());
      Assert.assertEquals("workflowId", token.getWorkflowId());
    }
@@ -2992,6 +3224,271 @@ index 1f22fe8..e55aa7b 100644
      Assert.assertEquals("namespace", token.getNamespace());
      Assert.assertEquals("workflowId", token.getWorkflowId());
    }
+@@ -100,7 +123,7 @@ public class OperationTokenTest {
+   }
+ 
+   @Test
+-  public void roundTripActivityExecutionToken() throws JsonProcessingException {
++  public void roundTripActivityExecutionToken() throws IOException {
+     String encoded = OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "ns");
+     OperationToken token = OperationTokenUtil.loadOperationToken(encoded);
+     Assert.assertEquals(OperationTokenType.ACTIVITY_EXECUTION, token.getType());
+@@ -115,7 +138,7 @@ public class OperationTokenTest {
+   }
+ 
+   @Test
+-  public void roundTripActivityExecutionTokenWithRunId() throws JsonProcessingException {
++  public void roundTripActivityExecutionTokenWithRunId() throws IOException {
+     String encoded =
+         OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "run-1", "ns");
+     OperationToken token = OperationTokenUtil.loadOperationToken(encoded);
+@@ -128,7 +151,7 @@ public class OperationTokenTest {
+   }
+ 
+   @Test
+-  public void activityExecutionTokenOmitsRunIdWhenNull() throws JsonProcessingException {
++  public void activityExecutionTokenOmitsRunIdWhenNull() throws IOException {
+     // The header-token path passes runId=null and must produce a payload byte-identical to the
+     // two-arg overload — the runId-aware overload is the *only* one used in code now.
+     String withRunId =
+@@ -138,13 +161,31 @@ public class OperationTokenTest {
+   }
+ 
+   @Test
+-  public void workflowRunTokenBytesByteIdenticalSnapshot() throws JsonProcessingException {
++  public void workflowRunTokenBytesByteIdenticalSnapshot() throws IOException {
+     String encoded = OperationTokenUtil.generateWorkflowRunOperationToken("wf-1", "ns");
+     // The encoded token must remain byte-identical for cross-SDK compatibility.
+     // Snapshot captured from the current (pre-aid) SDK output.
+     Assert.assertEquals("eyJ0IjoxLCJucyI6Im5zIiwid2lkIjoid2YtMSJ9", encoded);
+   }
+ 
++  @Test
++  public void activityExecutionTokenBytesByteIdenticalSnapshot() throws IOException {
++    String encoded = OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "ns");
++    // Byte-identical to upstream's field-order-driven Jackson output: {"t":2,"ns":"ns",
++    // "aid":"act-1"}.
++    Assert.assertEquals("eyJ0IjoyLCJucyI6Im5zIiwiYWlkIjoiYWN0LTEifQ", encoded);
++  }
++
++  @Test
++  public void workflowUpdateTokenBytesByteIdenticalSnapshot() throws IOException {
++    String encoded = OperationTokenUtil.generateWorkflowUpdateOperationToken("ns", "w", "r", "u");
++    // Byte-identical to upstream's field-order-driven Jackson output: {"t":3,"ns":"ns",
++    // "wid":"w","rid":"r","uid":"u"}. Property order here is driven by OperationToken's getter
++    // declaration order (Micronaut Serde), not field declaration order or @JsonCreator parameter
++    // order — see the comment on OperationToken#getUpdateId().
++    Assert.assertEquals("eyJ0IjozLCJucyI6Im5zIiwid2lkIjoidyIsInJpZCI6InIiLCJ1aWQiOiJ1In0", encoded);
++  }
++
+   @Test
+   public void malformedActivityTokenRejected() {
+     String malformed = "{\"t\":2,\"ns\":\"ns\",\"aid\":\"\"}";
+@@ -173,7 +214,116 @@ public class OperationTokenTest {
+   }
+ 
+   @Test
+-  public void loadWorkflowRunRejectsActivityToken() throws JsonProcessingException {
++  public void booleanTypeFieldRejected() {
++    // A JSON boolean for "t" must not be silently coerced into 0/1 (decoder.decodeInt() would do
++    // exactly that); upstream Jackson rejects a non-numeric "t" outright with
++    // IllegalArgumentException.
++    String booleanType = "{\"t\":true,\"ns\":\"ns1\",\"wid\":\"wid1\"}";
++    Assert.assertThrows(
++        IllegalArgumentException.class,
++        () ->
++            OperationTokenUtil.loadOperationToken(encoder.encodeToString(booleanType.getBytes())));
++  }
++
++  @Test
++  public void outOfIntRangeTypeFieldRejected() {
++    // 4294967297 (2^32 + 1) fits in a long and its low 32 bits equal 1, so a naive
++    // Number#intValue() truncation would silently accept it as WORKFLOW_RUN. Upstream Jackson
++    // rejects any "t" that doesn't fit in an int rather than wrapping it.
++    String outOfRange = "{\"t\":4294967297,\"ns\":\"ns1\",\"wid\":\"wid1\"}";
++    Assert.assertThrows(
++        IllegalArgumentException.class,
++        () -> OperationTokenUtil.loadOperationToken(encoder.encodeToString(outOfRange.getBytes())));
++
++    // Integer.MAX_VALUE + 1 is a much smaller counterexample of the same class of bug.
++    String justOutOfRange = "{\"t\":2147483648,\"ns\":\"ns1\",\"wid\":\"wid1\"}";
++    Assert.assertThrows(
++        IllegalArgumentException.class,
++        () ->
++            OperationTokenUtil.loadOperationToken(
++                encoder.encodeToString(justOutOfRange.getBytes())));
++  }
++
++  @Test
++  public void floatingTypeFieldTruncatedNotRejected() {
++    // Jackson truncates a floating-point "t" toward zero when coercing into the Integer field;
++    // it does not reject it. All three forms below truncate/parse to 1 (WORKFLOW_RUN).
++    for (String json :
++        new String[] {
++          "{\"t\":1.0,\"ns\":\"ns1\",\"wid\":\"wid1\"}",
++          "{\"t\":1.5,\"ns\":\"ns1\",\"wid\":\"wid1\"}",
++          "{\"t\":1e0,\"ns\":\"ns1\",\"wid\":\"wid1\"}"
++        }) {
++      OperationToken token =
++          OperationTokenUtil.loadOperationToken(encoder.encodeToString(json.getBytes()));
++      Assert.assertEquals(json, OperationTokenType.WORKFLOW_RUN, token.getType());
++    }
++  }
++
++  @Test
++  public void numericStringTypeFieldCoercedNotRejected() {
++    // Jackson coerces a numeric string "t" into the Integer field rather than rejecting it.
++    String numericString = "{\"t\":\"1\",\"ns\":\"ns1\",\"wid\":\"wid1\"}";
++    OperationToken token =
++        OperationTokenUtil.loadOperationToken(encoder.encodeToString(numericString.getBytes()));
++    Assert.assertEquals(OperationTokenType.WORKFLOW_RUN, token.getType());
++  }
++
++  @Test
++  public void nonNumericStringTypeFieldRejected() {
++    // A non-numeric string "t" must still be rejected, matching upstream.
++    String nonNumericString = "{\"t\":\"abc\",\"ns\":\"ns1\",\"wid\":\"wid1\"}";
++    Assert.assertThrows(
++        IllegalArgumentException.class,
++        () ->
++            OperationTokenUtil.loadOperationToken(
++                encoder.encodeToString(nonNumericString.getBytes())));
++  }
++
++  @Test
++  public void missingTypeFieldRejectedNotNpe() {
++    // A token with no "t" field at all must normalize to UNKNOWN (matching upstream's
++    // OperationTokenType.fromValue(null)) and be rejected with IllegalArgumentException, not an
++    // NPE from switch(token.getType()).
++    String missingType = "{\"ns\":\"ns\",\"wid\":\"w\"}";
++    IllegalArgumentException ex =
++        Assert.assertThrows(
++            IllegalArgumentException.class,
++            () ->
++                OperationTokenUtil.loadOperationToken(
++                    encoder.encodeToString(missingType.getBytes())));
++    Assert.assertTrue(
++        "expected 'unknown operation token type' in message but got: " + ex.getMessage(),
++        ex.getMessage().contains("unknown operation token type"));
++  }
++
++  @Test
++  public void explicitNullTypeFieldRejectedNotNpe() {
++    // An explicit "t":null must also normalize to UNKNOWN and be rejected the same way.
++    String nullType = "{\"t\":null,\"ns\":\"ns\",\"wid\":\"w\"}";
++    IllegalArgumentException ex =
++        Assert.assertThrows(
++            IllegalArgumentException.class,
++            () ->
++                OperationTokenUtil.loadOperationToken(encoder.encodeToString(nullType.getBytes())));
++    Assert.assertTrue(
++        "expected 'unknown operation token type' in message but got: " + ex.getMessage(),
++        ex.getMessage().contains("unknown operation token type"));
++  }
++
++  @Test
++  public void unknownFieldRejected() {
++    // These are cross-SDK wire tokens; an unrecognized field must fail parsing rather than be
++    // silently dropped, matching upstream's default Jackson (fail-on-unknown-properties) behavior.
++    String unknownField = "{\"t\":1,\"ns\":\"ns\",\"wid\":\"w\",\"future\":\"x\"}";
++    Assert.assertThrows(
++        IllegalArgumentException.class,
++        () ->
++            OperationTokenUtil.loadOperationToken(encoder.encodeToString(unknownField.getBytes())));
++  }
++
++  @Test
++  public void loadWorkflowRunRejectsActivityToken() throws IOException {
+     String activityToken =
+         OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "ns");
+     IllegalArgumentException ex =
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/UpdateRunTokenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/UpdateRunTokenTest.java
+index 5895d29..fed7673 100644
+--- a/temporal-sdk/src/test/java/io/temporal/internal/nexus/UpdateRunTokenTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/internal/nexus/UpdateRunTokenTest.java
+@@ -1,16 +1,13 @@
+ package io.temporal.internal.nexus;
+ 
+-import com.fasterxml.jackson.core.JsonProcessingException;
+-import com.fasterxml.jackson.databind.*;
+-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
++import java.io.IOException;
+ import java.util.Base64;
+ import org.junit.Assert;
+ import org.junit.Test;
+ 
+ public class UpdateRunTokenTest {
+-  private static final ObjectWriter ow =
+-      new ObjectMapper().registerModule(new Jdk8Module()).writer();
+   private static final Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
++  private static final Base64.Decoder decoder = Base64.getUrlDecoder();
+ 
+   private static final String namespace = "ns";
+   private static final String workflowId = "w";
+@@ -18,15 +15,15 @@ public class UpdateRunTokenTest {
+   private static final String updateId = "u";
+ 
+   @Test
+-  public void serializeWorkflowUpdateTokenOmitsEmptyRunId() throws JsonProcessingException {
+-    OperationToken token = new OperationToken("ns", "wid", null, "uid");
+-    String json = ow.writeValueAsString(token);
+-    JsonNode node = new ObjectMapper().readTree(json);
+-    Assert.assertFalse(node.has("rid"));
++  public void serializeWorkflowUpdateTokenOmitsEmptyRunId() throws IOException {
++    String encoded =
++        OperationTokenUtil.generateWorkflowUpdateOperationToken("ns", "wid", null, "uid");
++    String json = new String(decoder.decode(encoded));
++    Assert.assertFalse(json.contains("\"rid\":"));
+   }
+ 
+   @Test
+-  public void testEncodeDecode() throws JsonProcessingException {
++  public void testEncodeDecode() throws IOException {
+     String encoded =
+         OperationTokenUtil.generateWorkflowUpdateOperationToken(
+             namespace, workflowId, runId, updateId);
+@@ -82,7 +79,7 @@ public class UpdateRunTokenTest {
+   }
+ 
+   @Test
+-  public void rejectInvalidUpdateTokenLoads() throws JsonProcessingException {
++  public void rejectInvalidUpdateTokenLoads() throws IOException {
+     // loading update token from an encoded workflow run token should fail
+     Assert.assertThrows(
+         IllegalArgumentException.class,
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/AsyncWorkflowBuilder.java b/temporal-sdk/src/test/java/io/temporal/internal/statemachines/AsyncWorkflowBuilder.java
+index 634a052..ed8cc25 100644
+--- a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/AsyncWorkflowBuilder.java
++++ b/temporal-sdk/src/test/java/io/temporal/internal/statemachines/AsyncWorkflowBuilder.java
+@@ -1,5 +1,8 @@
+ package io.temporal.internal.statemachines;
+ 
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.workflow.Functions;
+ import java.util.Queue;
+ 
+@@ -14,11 +17,16 @@ import java.util.Queue;
+  */
+ interface AsyncWorkflowBuilder<T> {
+ 
++  // Getter-based bean: Micronaut Serde serializes via getters (not public fields) and
++  // deserializes via the @JsonCreator constructor (fields have no setters). This is test-only
++  // infrastructure absent from the shipped jar, so this shape change has no production impact.
++  @Serdeable
+   class Pair<T1, T2> {
+-    public final T1 t1;
+-    public final T2 t2;
++    private final T1 t1;
++    private final T2 t2;
+ 
+-    public Pair(T1 t1, T2 t2) {
++    @JsonCreator
++    public Pair(@JsonProperty("t1") T1 t1, @JsonProperty("t2") T2 t2) {
+       this.t1 = t1;
+       this.t2 = t2;
+     }
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java b/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
 index 5a6d54f..4435d43 100644
 --- a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
@@ -3051,7 +3548,7 @@ index 0000000..8de0e54
 +  }
 +}
 diff --git a/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java b/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java
-index b80d348..fe8cc83 100644
+index 4a90047..d437955 100644
 --- a/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java
 @@ -7,6 +7,8 @@ import static org.junit.Assert.assertNotNull;
@@ -3063,7 +3560,7 @@ index b80d348..fe8cc83 100644
  import io.temporal.activity.ActivityInterface;
  import io.temporal.activity.ActivityOptions;
  import io.temporal.api.common.v1.WorkflowExecution;
-@@ -538,6 +540,15 @@ public class StickyWorkerTest {
+@@ -540,6 +542,15 @@ public class StickyWorkerTest {
      }
    }
  
@@ -3105,19 +3602,6 @@ index 30f2252..9d7b999 100644
    public static class WorkflowParams {
  
      public int ChainSequence;
-diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/MemoTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/MemoTest.java
-index a36c9a9..d97f90b 100644
---- a/temporal-sdk/src/test/java/io/temporal/workflow/MemoTest.java
-+++ b/temporal-sdk/src/test/java/io/temporal/workflow/MemoTest.java
-@@ -116,7 +116,7 @@ public class MemoTest {
-       Map result =
-           Workflow.getMemo(
-               MEMO_KEY_2, Map.class, new TypeToken<HashMap<String, Integer>>() {}.getType());
--      assertTrue(result instanceof HashMap);
-+      assertTrue(result instanceof Map);
-       assertEquals(MEMO_VALUE_2, result.get(MEMO_KEY_2));
- 
-       // Requested mismatched type
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
 index c822036..0ebeebe 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
@@ -3183,6 +3667,37 @@ index fc8767d..4da637c 100644
      }
  
      @OperationImpl
+diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java
+index b228d02..ba41eee 100644
+--- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java
+@@ -243,14 +243,19 @@ public class UpdateWorkflowOperationTest extends BaseNexusTest {
+   }
+ 
+   // container for the update input
++  // Getter-based bean: Micronaut Serde serializes via getters (not public fields) and
++  // deserializes via the @JsonCreator constructor (fields have no setters).
++  @io.micronaut.serde.annotation.Serdeable
+   public static final class UpdateRequest {
+-    public String targetWorkflowId;
+-    public String value;
+-    public String updateId;
+-
+-    public UpdateRequest() {}
+-
+-    public UpdateRequest(String targetWorkflowId, String value, String updateId) {
++    private final String targetWorkflowId;
++    private final String value;
++    private final String updateId;
++
++    @com.fasterxml.jackson.annotation.JsonCreator
++    public UpdateRequest(
++        @com.fasterxml.jackson.annotation.JsonProperty("targetWorkflowId") String targetWorkflowId,
++        @com.fasterxml.jackson.annotation.JsonProperty("value") String value,
++        @com.fasterxml.jackson.annotation.JsonProperty("updateId") String updateId) {
+       this.targetWorkflowId = targetWorkflowId;
+       this.value = value;
+       this.updateId = updateId;
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/updateTest/SpeculativeUpdateTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/updateTest/SpeculativeUpdateTest.java
 index 9e08de1..160ef92 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/updateTest/SpeculativeUpdateTest.java
@@ -3378,10 +3893,10 @@ index 0074aa0..2352e93 100644
    public void close() {}
  }
 diff --git a/temporal-testing/build.gradle b/temporal-testing/build.gradle
-index 606f88f..8aa4b32 100644
+index f9ca013..e7cda23 100644
 --- a/temporal-testing/build.gradle
 +++ b/temporal-testing/build.gradle
-@@ -30,6 +30,8 @@ dependencies {
+@@ -32,6 +32,8 @@ dependencies {
      junit5Api 'org.junit.jupiter:junit-jupiter-api'
  
      testRuntimeOnly group: 'org.junit.jupiter', name: 'junit-jupiter'
