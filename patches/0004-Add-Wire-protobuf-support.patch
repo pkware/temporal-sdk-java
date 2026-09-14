@@ -1,4 +1,4 @@
-From dea391bd0f9ce382b39253b149a5529d684058da Mon Sep 17 00:00:00 2001
+From 920061adb59eb1a983b7915567713bfc285de257 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Sat, 27 Jun 2026 15:10:41 -0400
 Subject: [PATCH] Add Wire protobuf support
@@ -118,7 +118,7 @@ index fdde671..86a8c67 100644
                      sign publication
                  }
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index 7c81be2..a7fb6c9 100644
+index e28f24d..31fbafb 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -1,10 +1,24 @@

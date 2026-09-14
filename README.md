@@ -24,7 +24,9 @@ DataConverter converter =
         .withPayloadConverterOverrides(new MicronautSerdePayloadConverter(appObjectMapper));
 ```
 
-The no-arg constructor falls back to a library-private mapper (used by SDK defaults and tests).
+The no-arg constructor used by SDK defaults resolves a mapper installed by the application via
+`InternalSerdeMapper.install(ObjectMapper)`; if none was installed before first use, `get()` throws
+`IllegalStateException` rather than build one itself.
 
 **Behavior differences from the previous Jackson converter** (Serde is reflection-free / compile-time):
 
