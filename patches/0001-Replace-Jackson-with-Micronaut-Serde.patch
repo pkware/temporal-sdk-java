@@ -1,4 +1,4 @@
-From 6633b3c2472832cfefadcfce5545949de041c330 Mon Sep 17 00:00:00 2001
+From 177c91f16560ba5d400a111c2a3bed76b370da8c Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -23,6 +23,23 @@ bare type variables (T1, T2): under Serde, Pair gets the getter-based
 @Serdeable + @JsonCreator shape already used for other test-only DTOs in
 this series, so DataConverter can serialize it and all 21 tests run in the
 normal suite.
+
+A library must not construct its own DI container: the naive
+MicronautSerdePayloadConverter() no-arg path called
+ObjectMapper.create(Map.of(), "io.temporal.common.converter"), which boots
+a full Micronaut ApplicationContext behind an innocuous-looking static
+field, invisible shared state that measured 187-223 ms and +1762 loaded
+classes in a non-Micronaut JVM the first time anything touched it. Because
+that path was reachable from DefaultDataConverter's static converter
+array, "anything" included the in-process test server's time-skipping
+"Timer task" thread, which then stalled SignalDuringLastWorkflowTaskTest.
+InternalSerdeMapper now constructs nothing: the application installs its
+mapper via InternalSerdeMapper.install(ObjectMapper) before any SDK code
+path reaches get(), which throws IllegalStateException if nothing was
+installed. The fork's own test JVMs install eagerly via a javaagent
+(temporal-sdk/src/serdeTestAgent/) rather than a lazy fallback, since a
+lazy install would still pay that cost on whichever thread reaches it
+first.
 ---
  build.gradle                                  |  12 +-
  contrib/temporal-workflowstreams/build.gradle |   8 +-
@@ -34,22 +51,22 @@ normal suite.
  .../workflowstreams/WorkflowStreamState.java  |   4 +
  gradle.properties                             |   7 +
  gradle/errorprone.gradle                      |   8 +-
- gradle/java.gradle                            |  12 +-
+ gradle/java.gradle                            |  30 +-
  gradle/linting.gradle                         |   4 +-
  gradle/wrapper/gradle-wrapper.properties      |   2 +-
  settings.gradle                               |  32 +-
  temporal-bom/build.gradle                     |   9 -
  temporal-remote-data-encoder/build.gradle     |   2 +-
- temporal-sdk/build.gradle                     | 105 +-----
+ temporal-sdk/build.gradle                     | 128 ++------
  .../Jackson3JsonPayloadConverterTest.java     | 216 -------------
  .../common/converter/CodecDataConverter.java  |  25 +-
  .../common/converter/DataConverter.java       |   4 +-
  .../converter/DefaultDataConverter.java       |   2 +-
  .../common/converter/DurationMillisSerde.java |  40 +++
- .../common/converter/InternalSerdeMapper.java |  28 ++
+ .../common/converter/InternalSerdeMapper.java |  52 +++
  .../Jackson3JsonPayloadConverter.java         |  50 ---
  .../JacksonJsonPayloadConverter.java          | 141 --------
- .../MicronautSerdePayloadConverter.java       | 118 +++++++
+ .../MicronautSerdePayloadConverter.java       | 128 ++++++++
  .../converter/OperationTokenTypeSerde.java    | 100 ++++++
  .../PayloadAndFailureDataConverter.java       |   8 +
  .../common/converter/PayloadConverter.java    |   4 +-
@@ -68,10 +85,12 @@ normal suite.
  .../nexus/TemporalNexusClientImpl.java        |   6 +-
  .../temporal/payload/codec/PayloadCodec.java  |   4 +-
  .../Jackson3JsonPayloadConverter.java         | 134 --------
+ .../io/temporal/testagent/SerdeTestAgent.java |  45 +++
  .../ActivityHeartbeatThrottlingTest.java      |   4 +-
  .../temporal/activity/ActivityInfoTest.java   | 306 ++++++++++++++----
  .../common/converter/DurationMillisTest.java  |  51 +++
  .../common/converter/EncodedValuesTest.java   |   4 +-
+ .../converter/InternalSerdeMapperTest.java    |  28 ++
  .../JacksonJsonPayloadConverterTest.java      | 158 ---------
  .../converter/JsonDataConverterTest.java      |   7 +-
  .../MicronautSerdePayloadConverterTest.java   |  86 +++++
@@ -94,7 +113,7 @@ normal suite.
  temporal-test-server/build.gradle             |  15 +-
  .../testservice/TestVisibilityStoreImpl.java  |  49 +++
  temporal-testing/build.gradle                 |   2 +
- 70 files changed, 1410 insertions(+), 1068 deletions(-)
+ 72 files changed, 1558 insertions(+), 1068 deletions(-)
  create mode 100644 gradle.properties
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
@@ -105,7 +124,9 @@ normal suite.
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/internal/common/NexusFailureInfoJson.java
  delete mode 100644 temporal-sdk/src/main/java17/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
+ create mode 100644 temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java
+ create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java
  delete mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java
@@ -326,7 +347,7 @@ index 0334b3e..7175c0d 100644
 \ No newline at end of file
 +}
 diff --git a/gradle/java.gradle b/gradle/java.gradle
-index 37db264..d75a096 100644
+index 37db264..e364f5b 100644
 --- a/gradle/java.gradle
 +++ b/gradle/java.gradle
 @@ -4,10 +4,12 @@ subprojects {
@@ -363,6 +384,31 @@ index 37db264..d75a096 100644
          }
      }
  
+@@ -66,6 +68,24 @@ subprojects {
+         }
+     }
+ 
++    // Install the fork's InternalSerdeMapper eagerly, via a javaagent's premain, before any test
++    // code runs on every Test task (not just `test` above): `testResourceIndependent`
++    // (temporal-sdk/build.gradle) and the `virtualThreadTests`/`testsWithVirtualThreads` suites are
++    // separate Test tasks that `test { ... }` above does not reach. `serdeTestAgentJar` is
++    // registered by temporal-sdk's own build.gradle, so wait for that project to finish evaluating
++    // before referencing its task, even when it is this same project (`test { ... }` above already
++    // realizes `test` eagerly, so `configureEach` cannot defer this on its own). See
++    // temporal-sdk/src/serdeTestAgent for the agent itself.
++    project.rootProject.project(':temporal-sdk').afterEvaluate { sdkProject ->
++        def agentJar = sdkProject.tasks.named('serdeTestAgentJar', Jar)
++        tasks.withType(Test).configureEach {
++            dependsOn agentJar
++            def agentJarFile = agentJar.flatMap { it.archiveFile }
++            jvmArgumentProviders.add(
++                    { ["-javaagent:${agentJarFile.get().asFile.absolutePath}"] } as CommandLineArgumentProvider)
++        }
++    }
++
+     // print out tracked failed tests when the build has finished
+     gradle.buildFinished {
+         if (!failedTests.empty) {
 diff --git a/gradle/linting.gradle b/gradle/linting.gradle
 index fbc410d..6ff0feb 100644
 --- a/gradle/linting.gradle
@@ -473,7 +519,7 @@ index f7cae3b..418936d 100644
  }
  
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index d7b090e..7c81be2 100644
+index d7b090e..e28f24d 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -2,7 +2,6 @@ description = '''Temporal Workflow Java SDK'''
@@ -538,7 +584,7 @@ index d7b090e..7c81be2 100644
      java21Implementation files(sourceSets.main.output.classesDirs) { builtBy compileJava }
  }
  
-@@ -100,18 +88,11 @@ tasks.named('compilePayloadVisitorGeneratorJava') {
+@@ -100,18 +88,34 @@ tasks.named('compilePayloadVisitorGeneratorJava') {
      options.errorprone.error('MissingCasesInEnumSwitch')
  }
  
@@ -550,14 +596,37 @@ index d7b090e..7c81be2 100644
      options.release = 21
  }
  
- jar {
+-jar {
 -    into('META-INF/versions/17') {
 -        from sourceSets.java17.output
--    }
++// Javaagent that installs InternalSerdeMapper eagerly, in premain, for the fork's own test JVMs
++// (see gradle/java.gradle). It resolves io.temporal.common.converter.InternalSerdeMapper by name
++// at runtime and has no compile-time dependency on this project's main sources, so it stays out of
++// components.java and publishes nothing (gradle/publishing.gradle:18-27 only publishes
++// components.java).
++sourceSets {
++    serdeTestAgent {
++        java {
++            srcDirs = ['src/serdeTestAgent/java']
++        }
+     }
++}
++
++tasks.register('serdeTestAgentJar', Jar) {
++    archiveClassifier.set('serde-test-agent')
++    from sourceSets.serdeTestAgent.output
++    manifest {
++        attributes(
++                'Premain-Class': 'io.temporal.testagent.SerdeTestAgent',
++        )
++    }
++}
++
++jar {
      into('META-INF/versions/21') {
          from sourceSets.java21.output
      }
-@@ -120,27 +101,6 @@ jar {
+@@ -120,27 +124,6 @@ jar {
      )
  }
  
@@ -585,7 +654,7 @@ index d7b090e..7c81be2 100644
  task registerNamespace(type: JavaExec) {
      getMainClass().set('io.temporal.internal.docker.RegisterTestNamespace')
      classpath = sourceSets.test.runtimeClasspath
-@@ -154,20 +114,6 @@ test {
+@@ -154,20 +137,6 @@ test {
      }
  }
  
@@ -606,7 +675,7 @@ index d7b090e..7c81be2 100644
  task testResourceIndependent(type: Test) {
      useJUnit {
          includeCategories 'io.temporal.worker.IndependentResourceBasedTests'
-@@ -207,41 +153,11 @@ testing {
+@@ -207,41 +176,11 @@ testing {
              }
          }
  
@@ -651,7 +720,7 @@ index d7b090e..7c81be2 100644
              targets {
                  all {
                      testTask.configure {
-@@ -285,6 +201,5 @@ testing {
+@@ -285,6 +224,5 @@ testing {
  }
  
  tasks.named('check') {
@@ -1034,36 +1103,60 @@ index 0000000..393b2fb
 +}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java b/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
 new file mode 100644
-index 0000000..4fec85e
+index 0000000..3cf94b5
 --- /dev/null
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,52 @@
 +package io.temporal.common.converter;
 +
 +import io.micronaut.serde.ObjectMapper;
-+import java.util.Map;
 +
 +/**
-+ * Library-private Serde mapper for SDK-internal protocol JSON (Nexus operation tokens,
-+ * local-activity markers). Format-stable and independent of any application {@link ObjectMapper}.
++ * Holds the {@link ObjectMapper} used for SDK-internal protocol JSON (Nexus operation tokens,
++ * local-activity markers). Format-stable and independent of any application {@link ObjectMapper}
++ * the caller also uses for its own payloads.
 + *
-+ * <p>Built via {@link ObjectMapper#create(Map, String...)} scoped to this package, which loads the
-+ * package's {@code @Singleton} {@link io.micronaut.serde.Serde} beans ({@link DurationMillisSerde},
-+ * {@link OperationTokenTypeSerde}) without a full Micronaut context. {@code Duration} is serialized
-+ * as integer millis and {@link io.temporal.internal.nexus.OperationTokenType} as its integer value
-+ * here only; this mapper never touches user payloads, and {@code ObjectMapper.getDefault()} does
-+ * NOT inherit these serdes, so those formats cannot leak.
++ * <p>This class never constructs a mapper itself. The application installs one via {@link
++ * #install(ObjectMapper)} before any SDK code path reaches {@link #get()}. Because the SDK ships
++ * the package's {@code @Singleton} {@link io.micronaut.serde.Serde} beans ({@link
++ * DurationMillisSerde}, {@link OperationTokenTypeSerde}) alongside its classes, any Micronaut
++ * {@link ObjectMapper} built with the SDK jar on the classpath already resolves them, so the
++ * application's own mapper is a correct value to install.
 + */
 +public final class InternalSerdeMapper {
 +  private InternalSerdeMapper() {}
 +
-+  private static final class Holder {
-+    static final ObjectMapper INSTANCE =
-+        ObjectMapper.create(Map.of(), "io.temporal.common.converter");
++  private static volatile ObjectMapper instance;
++
++  /**
++   * Installs the mapper returned by {@link #get()}. The application must call this once, before any
++   * SDK code path reaches {@link #get()}.
++   *
++   * @param mapper the mapper to use for SDK-internal protocol JSON.
++   */
++  public static void install(ObjectMapper mapper) {
++    instance = mapper;
 +  }
 +
++  /**
++   * Returns the mapper installed via {@link #install(ObjectMapper)}.
++   *
++   * @throws IllegalStateException if {@link #install(ObjectMapper)} has not been called yet. The
++   *     SDK does not construct a mapper on its own.
++   */
 +  public static ObjectMapper get() {
-+    return Holder.INSTANCE;
++    ObjectMapper mapper = instance;
++    if (mapper == null) {
++      throw new IllegalStateException(
++          "InternalSerdeMapper.install(ObjectMapper) must be called before "
++              + "InternalSerdeMapper.get() is used. The SDK does not build this mapper itself.");
++    }
++    return mapper;
++  }
++
++  /** Test-only: clears the installed mapper so a test can observe {@link #get()}'s failure. */
++  static void clear() {
++    instance = null;
 +  }
 +}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
@@ -1271,10 +1364,10 @@ index 7022d71..0000000
 -}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java
 new file mode 100644
-index 0000000..824d6ae
+index 0000000..00b9f0c
 --- /dev/null
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,128 @@
 +package io.temporal.common.converter;
 +
 +import com.google.protobuf.ByteString;
@@ -1287,12 +1380,13 @@ index 0000000..824d6ae
 +import java.util.Collection;
 +import java.util.Map;
 +import java.util.Optional;
++import javax.annotation.Nullable;
 +
 +/**
 + * Temporal {@link PayloadConverter} backed by Micronaut Serde, replacing the default Jackson
 + * converter under the same {@code json/plain} encoding. In production, construct with the
-+ * application's injected {@link ObjectMapper}; the no-arg constructor falls back to a minimal
-+ * library-private mapper (see {@link InternalSerdeMapper}) for SDK default paths and tests.
++ * application's injected {@link ObjectMapper}; the no-arg constructor resolves the mapper installed
++ * via {@link InternalSerdeMapper#install(ObjectMapper)} at first use, for SDK default paths.
 + */
 +public final class MicronautSerdePayloadConverter implements PayloadConverter {
 +
@@ -1300,14 +1394,23 @@ index 0000000..824d6ae
 +  private static final ByteString ENCODING_METADATA =
 +      ByteString.copyFrom(ENCODING_TYPE, StandardCharsets.UTF_8);
 +
-+  private final ObjectMapper objectMapper;
++  @Nullable private final ObjectMapper objectMapper;
 +
 +  public MicronautSerdePayloadConverter(ObjectMapper objectMapper) {
 +    this.objectMapper = objectMapper;
 +  }
 +
++  /**
++   * Reachable from {@link DefaultDataConverter}'s static {@code STANDARD_PAYLOAD_CONVERTERS} array.
++   * Resolves {@link InternalSerdeMapper#get()} at first use rather than at construction, so the
++   * application has an opportunity to call {@link InternalSerdeMapper#install(ObjectMapper)} first.
++   */
 +  public MicronautSerdePayloadConverter() {
-+    this(InternalSerdeMapper.get());
++    this.objectMapper = null;
++  }
++
++  private ObjectMapper mapper() {
++    return objectMapper != null ? objectMapper : InternalSerdeMapper.get();
 +  }
 +
 +  @Override
@@ -1338,7 +1441,7 @@ index 0000000..824d6ae
 +              .build());
 +    }
 +    try {
-+      byte[] bytes = objectMapper.writeValueAsBytes(value);
++      byte[] bytes = mapper().writeValueAsBytes(value);
 +      return Optional.of(
 +          Payload.newBuilder()
 +              .putMetadata(EncodingKeys.METADATA_ENCODING_KEY, ENCODING_METADATA)
@@ -1362,7 +1465,7 @@ index 0000000..824d6ae
 +      // A JSON "null" payload is a valid encoding of a null value (e.g. an absent Optional, or a
 +      // null search-attribute value). Return it as-is; do NOT treat null as an error, matching the
 +      // removed Moshi/Jackson behavior. Empty payload data is rejected above.
-+      return (T) objectMapper.readValue(data.toByteArray(), argument);
++      return (T) mapper().readValue(data.toByteArray(), argument);
 +    } catch (IOException e) {
 +      throw new DataConverterException(e);
 +    }
@@ -2236,6 +2339,57 @@ index 46820e6..0000000
 -    }
 -  }
 -}
+diff --git a/temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java b/temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java
+new file mode 100644
+index 0000000..2fca2f0
+--- /dev/null
++++ b/temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java
+@@ -0,0 +1,45 @@
++package io.temporal.testagent;
++
++import java.lang.instrument.Instrumentation;
++import java.lang.reflect.Method;
++import java.util.Map;
++
++/**
++ * Javaagent that installs {@code io.temporal.common.converter.InternalSerdeMapper} eagerly, in
++ * {@code premain}, before any test code runs. Eager installation is required because a lazy
++ * fallback runs on whichever thread happens to be first, and that thread is sometimes the
++ * time-skipping virtual clock's {@code "Timer task"} thread, which then stalls.
++ *
++ * <p>Resolves the SDK's classes by name via reflection, so this agent has no compile- or run-time
++ * dependency on the SDK. A JVM whose classpath has no {@code temporal-sdk} (e.g.
++ * temporal-workflowcheck's tests) leaves {@link #premain} a no-op.
++ *
++ * <p>Not part of the published SDK; wired only onto the fork's own test JVMs by {@code
++ * gradle/java.gradle}.
++ */
++public final class SerdeTestAgent {
++  private SerdeTestAgent() {}
++
++  public static void premain(String agentArgs, Instrumentation instrumentation) {
++    ClassLoader loader = ClassLoader.getSystemClassLoader();
++    Class<?> objectMapperClass;
++    Class<?> internalSerdeMapperClass;
++    try {
++      objectMapperClass = Class.forName("io.micronaut.serde.ObjectMapper", false, loader);
++      internalSerdeMapperClass =
++          Class.forName("io.temporal.common.converter.InternalSerdeMapper", false, loader);
++    } catch (ClassNotFoundException e) {
++      return;
++    }
++    try {
++      Method createMethod = objectMapperClass.getMethod("create", Map.class, String[].class);
++      Object mapper =
++          createMethod.invoke(
++              null, Map.of(), (Object) new String[] {"io.temporal.common.converter"});
++      Method installMethod = internalSerdeMapperClass.getMethod("install", objectMapperClass);
++      installMethod.invoke(null, mapper);
++    } catch (ReflectiveOperationException e) {
++      throw new IllegalStateException("Failed to install InternalSerdeMapper", e);
++    }
++  }
++}
 diff --git a/temporal-sdk/src/test/java/io/temporal/activity/ActivityHeartbeatThrottlingTest.java b/temporal-sdk/src/test/java/io/temporal/activity/ActivityHeartbeatThrottlingTest.java
 index 1ab5791..77a0dda 100644
 --- a/temporal-sdk/src/test/java/io/temporal/activity/ActivityHeartbeatThrottlingTest.java
@@ -2696,6 +2850,40 @@ index 0095787..104560e 100644
      Optional<Payloads> payloads = v.toPayloads();
      assertFalse(payloads.isPresent());
    }
+diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java
+new file mode 100644
+index 0000000..c1e58d1
+--- /dev/null
++++ b/temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java
+@@ -0,0 +1,28 @@
++package io.temporal.common.converter;
++
++import io.micronaut.serde.ObjectMapper;
++import org.junit.Assert;
++import org.junit.Test;
++
++/**
++ * Every test JVM in this fork installs a mapper via the {@code serdeTestAgent} javaagent before any
++ * test runs, so this test clears it to observe {@link InternalSerdeMapper#get()}'s fail-fast path,
++ * then restores it for the rest of the JVM's tests.
++ */
++public class InternalSerdeMapperTest {
++
++  @Test
++  public void getThrowsIllegalStateExceptionWhenNothingInstalled() {
++    ObjectMapper installed = InternalSerdeMapper.get();
++    try {
++      InternalSerdeMapper.clear();
++      IllegalStateException e =
++          Assert.assertThrows(IllegalStateException.class, InternalSerdeMapper::get);
++      Assert.assertTrue(
++          "message should name the install method: " + e.getMessage(),
++          e.getMessage().contains("InternalSerdeMapper.install"));
++    } finally {
++      InternalSerdeMapper.install(installed);
++    }
++  }
++}
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java
 deleted file mode 100644
 index 5154bdc..0000000
