@@ -1,4 +1,4 @@
-From e49ca8dccddc7c1790232a08d3dfa67c2180268c Mon Sep 17 00:00:00 2001
+From 282c5cd78ef767adaddaa59d2262b4338a63d72e Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 25 Jun 2026 12:18:14 -0400
 Subject: [PATCH] Replace grpc-netty-shaded with grpc-netty

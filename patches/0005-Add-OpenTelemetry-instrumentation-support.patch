@@ -1,4 +1,4 @@
-From 72525ec8fc38f98a3e63b87064e930121525ce7a Mon Sep 17 00:00:00 2001
+From bd0ba915f7f9ebcf12f04b012f48eb6c1e369c35 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Wed, 1 Jul 2026 17:25:34 -0400
 Subject: [PATCH] Add OpenTelemetry instrumentation support
@@ -90,7 +90,7 @@ Subject: [PATCH] Add OpenTelemetry instrumentation support
  create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
 
 diff --git a/settings.gradle b/settings.gradle
-index 99b7028..fd884d5 100644
+index fede8e3..7eba9ec 100644
 --- a/settings.gradle
 +++ b/settings.gradle
 @@ -4,12 +4,14 @@ include 'temporal-serviceclient'

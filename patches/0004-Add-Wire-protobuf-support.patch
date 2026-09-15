@@ -1,4 +1,4 @@
-From 920061adb59eb1a983b7915567713bfc285de257 Mon Sep 17 00:00:00 2001
+From 68055d285a14a86997a26404c6f82826ae05d6aa Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Sat, 27 Jun 2026 15:10:41 -0400
 Subject: [PATCH] Add Wire protobuf support
@@ -19,7 +19,7 @@ via the generated ADAPTER.
  create mode 100644 temporal-sdk/src/test/proto/test_wire.proto
 
 diff --git a/build.gradle b/build.gradle
-index a0074fa..1e3f9c5 100644
+index 1ceddbc..76bf838 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -1,3 +1,9 @@
@@ -118,7 +118,7 @@ index fdde671..86a8c67 100644
                      sign publication
                  }
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index e28f24d..31fbafb 100644
+index 4619a9c..e510f41 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -1,10 +1,24 @@
