@@ -1,4 +1,4 @@
-From 39c40005fec37774e6f6770e818b3ac02c742276 Mon Sep 17 00:00:00 2001
+From 343b7d6cd8025b20fd050bad1dd400388bf1458a Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -102,6 +102,7 @@ first.
  .../statemachines/AsyncWorkflowBuilder.java   |  14 +-
  .../VersionStateMachineTest.java              |   2 +-
  ...SerializableRetryOptionsRoundTripTest.java |  39 +++
+ .../ContextAwareDataConverterTest.java        |   3 +
  .../io/temporal/worker/StickyWorkerTest.java  |  11 +
  .../io/temporal/worker/WorkerStressTests.java |   8 +
  .../nexus/OperationFailMetricTest.java        |   2 +-
@@ -114,7 +115,7 @@ first.
  temporal-test-server/build.gradle             |  15 +-
  .../testservice/TestVisibilityStoreImpl.java  |  49 +++
  temporal-testing/build.gradle                 |   2 +
- 73 files changed, 1577 insertions(+), 1071 deletions(-)
+ 74 files changed, 1580 insertions(+), 1071 deletions(-)
  create mode 100644 gradle.properties
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
@@ -438,10 +439,10 @@ index df97d72..a351597 100644
  validateDistributionUrl=true
  zipStoreBase=GRADLE_USER_HOME
 diff --git a/settings.gradle b/settings.gradle
-index 7ec1835..fede8e3 100644
+index 0b6bb9b..7fc01ab 100644
 --- a/settings.gradle
 +++ b/settings.gradle
-@@ -4,26 +4,32 @@ include 'temporal-serviceclient'
+@@ -4,28 +4,34 @@ include 'temporal-serviceclient'
  include 'temporal-sdk'
  include 'temporal-testing'
  include 'temporal-test-server'
@@ -466,14 +467,16 @@ index 7ec1835..fede8e3 100644
  project(':temporal-workflowstreams').projectDir = file('contrib/temporal-workflowstreams')
 -include 'temporal-aws-lambda'
 -project(':temporal-aws-lambda').projectDir = file('contrib/temporal-aws-lambda')
--include 'temporal-gcp-cloud-run'
--project(':temporal-gcp-cloud-run').projectDir = file('contrib/temporal-gcp-cloud-run')
+-include 'temporal-gcp-cloud-run-opentelemetry'
+-project(':temporal-gcp-cloud-run-opentelemetry').projectDir = file('contrib/temporal-gcp-cloud-run-opentelemetry')
 +// Excluded: depends on the excluded upstream temporal-opentelemetry
 +// include 'temporal-aws-lambda'
 +// project(':temporal-aws-lambda').projectDir = file('contrib/temporal-aws-lambda')
 +// Excluded: depends on the excluded upstream temporal-opentelemetry
-+// include 'temporal-gcp-cloud-run'
-+// project(':temporal-gcp-cloud-run').projectDir = file('contrib/temporal-gcp-cloud-run')
++// include 'temporal-gcp-cloud-run-opentelemetry'
++// project(':temporal-gcp-cloud-run-opentelemetry').projectDir = file('contrib/temporal-gcp-cloud-run-opentelemetry')
+ include 'temporal-gcp-cloud-run-id'
+ project(':temporal-gcp-cloud-run-id').projectDir = file('contrib/temporal-gcp-cloud-run-id')
  include 'temporal-payload-storage-s3driver'
  project(':temporal-payload-storage-s3driver').projectDir = file('contrib/temporal-payload-storage-s3driver')
  include 'temporal-payload-storage-s3driver-awssdkv2'
@@ -489,10 +492,10 @@ index 7ec1835..fede8e3 100644
  include 'temporal-workflowcheck'
  include 'temporal-envconfig'
 diff --git a/temporal-bom/build.gradle b/temporal-bom/build.gradle
-index c79c4df..6b8d001 100644
+index 01ddcc4..bec4780 100644
 --- a/temporal-bom/build.gradle
 +++ b/temporal-bom/build.gradle
-@@ -6,21 +6,12 @@ description = '''Temporal Java BOM'''
+@@ -6,22 +6,13 @@ description = '''Temporal Java BOM'''
  
  dependencies {
      constraints {
@@ -500,8 +503,9 @@ index c79c4df..6b8d001 100644
 -        api project(':temporal-opentelemetry')
 -        api project(':temporal-opentracing')
 -        api project(':temporal-aws-lambda')
--        api project(':temporal-gcp-cloud-run')
+-        api project(':temporal-gcp-cloud-run-opentelemetry')
 +        api project(':temporal-envconfig')
+         api project(':temporal-gcp-cloud-run-id')
          api project(':temporal-remote-data-encoder')
          api project(':temporal-sdk')
          api project(':temporal-serviceclient')
@@ -529,7 +533,7 @@ index f7cae3b..418936d 100644
  }
  
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index d981a0c..4619a9c 100644
+index 2c0da78..b22d762 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -2,7 +2,6 @@ description = '''Temporal Workflow Java SDK'''
@@ -664,7 +668,7 @@ index d981a0c..4619a9c 100644
  task registerNamespace(type: JavaExec) {
      getMainClass().set('io.temporal.internal.docker.RegisterTestNamespace')
      classpath = sourceSets.test.runtimeClasspath
-@@ -180,20 +163,6 @@ test {
+@@ -236,20 +219,6 @@ task testCloud(type: Test) {
      }
  }
  
@@ -685,7 +689,7 @@ index d981a0c..4619a9c 100644
  task testResourceIndependent(type: Test) {
      useJUnit {
          includeCategories 'io.temporal.worker.IndependentResourceBasedTests'
-@@ -233,14 +202,10 @@ testing {
+@@ -289,14 +258,10 @@ testing {
              }
          }
  
@@ -703,7 +707,7 @@ index d981a0c..4619a9c 100644
              }
              targets {
                  all {
-@@ -256,32 +221,6 @@ testing {
+@@ -312,32 +277,6 @@ testing {
              }
          }
  
@@ -736,7 +740,7 @@ index d981a0c..4619a9c 100644
          // Run the same test as the normal test task with virtual threads
          testsWithVirtualThreads(JvmTestSuite) {
              // Use the same source and resources as the main test set
-@@ -311,6 +250,5 @@ testing {
+@@ -367,6 +306,5 @@ testing {
  }
  
  tasks.named('check') {
@@ -1671,10 +1675,10 @@ index 91d496b..7365e79 100644
            nextRetryDelay,
            category == null ? ApplicationErrorCategory.UNSPECIFIED : category);
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java b/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
-index 3bf753a..24bd661 100644
+index 5529719..c0625ce 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
-@@ -138,7 +138,7 @@ public class RootActivityClientInvoker implements ActivityClientCallsInterceptor
+@@ -168,7 +168,7 @@ public class RootActivityClientInvoker implements ActivityClientCallsInterceptor
          nexusOperationMetadata.operationToken =
              io.temporal.internal.nexus.OperationTokenUtil.generateActivityExecutionOperationToken(
                  options.getId(), clientOptions.getNamespace());
@@ -1877,10 +1881,10 @@ index 03e00f9..b67507b 100644
  
    public LocalActivityMarkerMetadata() {}
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
-index 4d40183..f83a908 100644
+index 0da2ebf..fd5d398 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
-@@ -372,7 +372,7 @@ public class NexusTaskHandlerImpl implements NexusTaskHandler {
+@@ -418,7 +418,7 @@ public class NexusTaskHandlerImpl implements NexusTaskHandler {
          temporalFailure.setStackTrace(e.getStackTrace());
        } else if (e.getState() == OperationState.CANCELED) {
          temporalFailure =
@@ -2428,7 +2432,7 @@ index 1ab5791..77a0dda 100644
                  describeResponse.getPendingActivities(0).getHeartbeatDetails().getPayloads(0),
                  String.class,
 diff --git a/temporal-sdk/src/test/java/io/temporal/activity/ActivityInfoTest.java b/temporal-sdk/src/test/java/io/temporal/activity/ActivityInfoTest.java
-index 8e8a8cc..3bf8fc3 100644
+index ab2f878..0362885 100644
 --- a/temporal-sdk/src/test/java/io/temporal/activity/ActivityInfoTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/activity/ActivityInfoTest.java
 @@ -1,5 +1,6 @@
@@ -2641,7 +2645,7 @@ index 8e8a8cc..3bf8fc3 100644
    }
  
    private static final RetryOptions RETRY_OPTIONS =
-@@ -63,23 +221,24 @@ public class ActivityInfoTest {
+@@ -63,24 +221,25 @@ public class ActivityInfoTest {
      ActivityInfoWorkflow workflow = testWorkflowRule.newWorkflowStub(ActivityInfoWorkflow.class);
      SerializedActivityInfo info = workflow.getActivityInfo(false);
      // Unpredictable values
@@ -2659,17 +2663,18 @@ index 8e8a8cc..3bf8fc3 100644
 -    Assert.assertEquals(ACTIVITY_OPTIONS.getStartToCloseTimeout(), info.startToCloseTimeout);
 -    Assert.assertEquals(ACTIVITY_OPTIONS.getHeartbeatTimeout(), info.heartbeatTimeout);
 -    Assert.assertEquals(ActivityInfoWorkflow.class.getSimpleName(), info.workflowType);
--    Assert.assertEquals(SDKTestWorkflowRule.NAMESPACE, info.namespace);
++    Assert.assertEquals(ActivityInfoActivity.ACTIVITY_NAME, info.getActivityType());
+     Assert.assertEquals(
+-        testWorkflowRule.getWorkflowClient().getOptions().getNamespace(), info.namespace);
 -    Assert.assertEquals(testWorkflowRule.getTaskQueue(), info.activityTaskQueue);
 -    Assert.assertFalse(info.isLocal);
 -    Assert.assertEquals(0, info.priorityKey);
-+    Assert.assertEquals(ActivityInfoActivity.ACTIVITY_NAME, info.getActivityType());
-+    Assert.assertEquals(
 +        ACTIVITY_OPTIONS.getScheduleToCloseTimeout(), info.getScheduleToCloseTimeout());
 +    Assert.assertEquals(ACTIVITY_OPTIONS.getStartToCloseTimeout(), info.getStartToCloseTimeout());
 +    Assert.assertEquals(ACTIVITY_OPTIONS.getHeartbeatTimeout(), info.getHeartbeatTimeout());
 +    Assert.assertEquals(ActivityInfoWorkflow.class.getSimpleName(), info.getWorkflowType());
-+    Assert.assertEquals(SDKTestWorkflowRule.NAMESPACE, info.getNamespace());
++    Assert.assertEquals(
++        testWorkflowRule.getWorkflowClient().getOptions().getNamespace(), info.getNamespace());
 +    Assert.assertEquals(testWorkflowRule.getTaskQueue(), info.getActivityTaskQueue());
 +    Assert.assertFalse(info.isLocal());
 +    Assert.assertEquals(0, info.getPriorityKey());
@@ -2680,7 +2685,7 @@ index 8e8a8cc..3bf8fc3 100644
    }
  
    @Test
-@@ -87,27 +246,32 @@ public class ActivityInfoTest {
+@@ -88,28 +247,33 @@ public class ActivityInfoTest {
      ActivityInfoWorkflow workflow = testWorkflowRule.newWorkflowStub(ActivityInfoWorkflow.class);
      SerializedActivityInfo info = workflow.getActivityInfo(true);
      // Unpredictable values
@@ -2704,18 +2709,19 @@ index 8e8a8cc..3bf8fc3 100644
 +    Assert.assertTrue(info.getStartToCloseTimeout().isZero());
 +    Assert.assertTrue(info.getHeartbeatTimeout().isZero());
 +    Assert.assertEquals(ActivityInfoWorkflow.class.getSimpleName(), info.getWorkflowType());
-+    Assert.assertEquals(SDKTestWorkflowRule.NAMESPACE, info.getNamespace());
+     Assert.assertEquals(
+-        LOCAL_ACTIVITY_OPTIONS.getScheduleToCloseTimeout(), info.scheduleToCloseTimeout);
+-    Assert.assertTrue(info.startToCloseTimeout.isZero());
+-    Assert.assertTrue(info.heartbeatTimeout.isZero());
+-    Assert.assertEquals(ActivityInfoWorkflow.class.getSimpleName(), info.workflowType);
++        testWorkflowRule.getWorkflowClient().getOptions().getNamespace(), info.getNamespace());
 +    Assert.assertEquals(testWorkflowRule.getTaskQueue(), info.getActivityTaskQueue());
 +    Assert.assertTrue(info.isLocal());
 +    Assert.assertEquals(0, info.getPriorityKey());
 +    Assert.assertTrue(info.isHasRetryOptions());
 +    Assert.assertEquals(RETRY_OPTIONS.getInitialInterval(), info.getRetryInitialInterval());
      Assert.assertEquals(
--        LOCAL_ACTIVITY_OPTIONS.getScheduleToCloseTimeout(), info.scheduleToCloseTimeout);
--    Assert.assertTrue(info.startToCloseTimeout.isZero());
--    Assert.assertTrue(info.heartbeatTimeout.isZero());
--    Assert.assertEquals(ActivityInfoWorkflow.class.getSimpleName(), info.workflowType);
--    Assert.assertEquals(SDKTestWorkflowRule.NAMESPACE, info.namespace);
+-        testWorkflowRule.getWorkflowClient().getOptions().getNamespace(), info.namespace);
 -    Assert.assertEquals(testWorkflowRule.getTaskQueue(), info.activityTaskQueue);
 -    Assert.assertTrue(info.isLocal);
 -    Assert.assertEquals(0, info.priorityKey);
@@ -2732,7 +2738,7 @@ index 8e8a8cc..3bf8fc3 100644
    }
  
    @WorkflowInterface
-@@ -145,27 +309,27 @@ public class ActivityInfoTest {
+@@ -147,27 +311,27 @@ public class ActivityInfoTest {
      public SerializedActivityInfo getActivityInfo() {
        ActivityInfo info = Activity.getExecutionContext().getInfo();
        SerializedActivityInfo serialized = new SerializedActivityInfo();
@@ -3750,8 +3756,36 @@ index 0000000..8de0e54
 +    assertArrayEquals(new String[] {"IllegalArgument"}, back.getDoNotRetry());
 +  }
 +}
+diff --git a/temporal-sdk/src/test/java/io/temporal/payload/context/ContextAwareDataConverterTest.java b/temporal-sdk/src/test/java/io/temporal/payload/context/ContextAwareDataConverterTest.java
+index b301dee..beb9e48 100644
+--- a/temporal-sdk/src/test/java/io/temporal/payload/context/ContextAwareDataConverterTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/payload/context/ContextAwareDataConverterTest.java
+@@ -4,6 +4,7 @@ import static org.junit.Assume.assumeTrue;
+ 
+ import com.fasterxml.jackson.annotation.JsonCreator;
+ import com.fasterxml.jackson.annotation.JsonProperty;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.activity.ActivityInterface;
+ import io.temporal.activity.ActivityMethod;
+ import io.temporal.activity.ActivityOptions;
+@@ -368,6 +369,7 @@ public class ContextAwareDataConverterTest {
+     }
+   }
+ 
++  @Serdeable
+   public static class TracedValue {
+     private final String value;
+     private final ArrayList<TraceEntry> trace;
+@@ -416,6 +418,7 @@ public class ContextAwareDataConverterTest {
+     }
+   }
+ 
++  @Serdeable
+   public static class TraceEntry {
+     private final @NonNull String tag;
+     private final Operation operation;
 diff --git a/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java b/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java
-index 4a90047..d437955 100644
+index 23d86fa..5babde7 100644
 --- a/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/worker/StickyWorkerTest.java
 @@ -7,6 +7,8 @@ import static org.junit.Assert.assertNotNull;
@@ -3763,7 +3797,7 @@ index 4a90047..d437955 100644
  import io.temporal.activity.ActivityInterface;
  import io.temporal.activity.ActivityOptions;
  import io.temporal.api.common.v1.WorkflowExecution;
-@@ -540,6 +542,15 @@ public class StickyWorkerTest {
+@@ -545,6 +547,15 @@ public class StickyWorkerTest {
      }
    }
  
@@ -3780,7 +3814,7 @@ index 4a90047..d437955 100644
  
      public int ChainSequence;
 diff --git a/temporal-sdk/src/test/java/io/temporal/worker/WorkerStressTests.java b/temporal-sdk/src/test/java/io/temporal/worker/WorkerStressTests.java
-index 30f2252..9d7b999 100644
+index c6a2922..c7e94e7 100644
 --- a/temporal-sdk/src/test/java/io/temporal/worker/WorkerStressTests.java
 +++ b/temporal-sdk/src/test/java/io/temporal/worker/WorkerStressTests.java
 @@ -3,6 +3,8 @@ package io.temporal.worker;
@@ -3792,7 +3826,7 @@ index 30f2252..9d7b999 100644
  import io.temporal.activity.ActivityInterface;
  import io.temporal.activity.ActivityOptions;
  import io.temporal.client.WorkflowClient;
-@@ -187,6 +189,12 @@ public class WorkerStressTests {
+@@ -192,6 +194,12 @@ public class WorkerStressTests {
      }
    }
  
@@ -3806,10 +3840,10 @@ index 30f2252..9d7b999 100644
  
      public int ChainSequence;
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
-index c822036..0ebeebe 100644
+index 4fd89f0..894ed33 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
-@@ -598,7 +598,7 @@ public class OperationFailMetricTest {
+@@ -603,7 +603,7 @@ public class OperationFailMetricTest {
    }
  
    private void assertNoRetries(String testCase) {
@@ -3819,7 +3853,7 @@ index c822036..0ebeebe 100644
  
    public static class TestNexus implements TestWorkflow1 {
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java
-index ac826b9..5ff9846 100644
+index 88ff329..b7cab16 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java
 @@ -1,5 +1,7 @@
@@ -3830,7 +3864,7 @@ index ac826b9..5ff9846 100644
  import io.nexusrpc.Operation;
  import io.nexusrpc.Service;
  import io.nexusrpc.handler.HandlerException;
-@@ -206,7 +208,21 @@ public class OperationInputDeserializationErrorPropagationTest {
+@@ -212,7 +214,21 @@ public class OperationInputDeserializationErrorPropagationTest {
      }
    }
  
@@ -3854,10 +3888,10 @@ index ac826b9..5ff9846 100644
      public String mode;
  
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/TerminateWorkflowAsyncOperationTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/TerminateWorkflowAsyncOperationTest.java
-index fc8767d..4da637c 100644
+index 792f6e2..b0265dd 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/TerminateWorkflowAsyncOperationTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/TerminateWorkflowAsyncOperationTest.java
-@@ -41,16 +41,28 @@ public class TerminateWorkflowAsyncOperationTest {
+@@ -46,16 +46,28 @@ public class TerminateWorkflowAsyncOperationTest {
          "operation terminated", ((TerminatedFailure) nexusFailure.getCause()).getOriginalMessage());
    }
  
@@ -3891,7 +3925,7 @@ index fc8767d..4da637c 100644
    }
  
    @Service
-@@ -98,9 +110,11 @@ public class TerminateWorkflowAsyncOperationTest {
+@@ -103,9 +115,11 @@ public class TerminateWorkflowAsyncOperationTest {
                            .getWorkflowClient()
                            .newWorkflowStub(
                                AsyncWorkflowOperationTest.OperationWorkflow.class,
@@ -3906,10 +3940,10 @@ index fc8767d..4da637c 100644
  
      @OperationImpl
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java
-index b228d02..ba41eee 100644
+index 143a9fd..a3f1bf7 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/UpdateWorkflowOperationTest.java
-@@ -243,14 +243,19 @@ public class UpdateWorkflowOperationTest extends BaseNexusTest {
+@@ -248,14 +248,19 @@ public class UpdateWorkflowOperationTest extends BaseNexusTest {
    }
  
    // container for the update input
