@@ -139,8 +139,15 @@ jobs:
           TARGET_TAG: ${{ steps.detect.outputs.tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          TITLE="Patch conflict on upstream ${TARGET_TAG}"
+          EXISTING=$(TITLE="$TITLE" gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title --jq '.[] | select(.title == env.TITLE) | .number' | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Still failing. **Run:** ${RUN_URL}"
+            exit 0
+          fi
           gh issue create \
-            --title "Patch conflict on upstream ${TARGET_TAG}" \
+            --title "$TITLE" \
             --body "Patches failed to apply against upstream [${TARGET_TAG}](https://github.com/temporalio/sdk-java/releases/tag/${TARGET_TAG}).
 
           **Run:** ${RUN_URL}
@@ -154,8 +161,15 @@ jobs:
           TARGET_TAG: ${{ steps.detect.outputs.tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          TITLE="Test failure on upstream ${TARGET_TAG}"
+          EXISTING=$(TITLE="$TITLE" gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number,title --jq '.[] | select(.title == env.TITLE) | .number' | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Still failing. **Run:** ${RUN_URL}"
+            exit 0
+          fi
           gh issue create \
-            --title "Test failure on upstream ${TARGET_TAG}" \
+            --title "$TITLE" \
             --body "Patches applied cleanly but build/tests failed against upstream [${TARGET_TAG}](https://github.com/temporalio/sdk-java/releases/tag/${TARGET_TAG}).
 
           **Run:** ${RUN_URL}
