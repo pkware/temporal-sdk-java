@@ -1,0 +1,269 @@
+From b1777cf1e4aaa6076aeb89a23b81a70b53e97f5e Mon Sep 17 00:00:00 2001
+From: Ethan Wrasman <ethan.wrasman@pkware.com>
+Date: Thu, 15 Oct 2026 09:48:28 -0500
+Subject: [PATCH] Serialize local activity marker backoff without a bean lookup
+
+---
+ .../common/converter/DurationMillisSerde.java | 40 -------------------
+ .../common/converter/InternalSerdeMapper.java |  8 ++--
+ .../history/LocalActivityMarkerMetadata.java  | 34 +++++++++++-----
+ .../LocalActivityStateMachine.java            |  4 +-
+ .../common/converter/DurationMillisTest.java  |  2 +-
+ .../common/converter/SerdeIsolationTest.java  | 14 +++----
+ ...alActivityMarkerMetadataRoundTripTest.java | 25 +++++++++++-
+ 7 files changed, 61 insertions(+), 66 deletions(-)
+ delete mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
+
+diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java b/temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
+deleted file mode 100644
+index 393b2fb..0000000
+--- a/temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
++++ /dev/null
+@@ -1,40 +0,0 @@
+-package io.temporal.common.converter;
+-
+-import io.micronaut.core.type.Argument;
+-import io.micronaut.serde.Decoder;
+-import io.micronaut.serde.Encoder;
+-import io.micronaut.serde.Serde;
+-import jakarta.inject.Singleton;
+-import java.io.IOException;
+-import java.time.Duration;
+-
+-/**
+- * Serializes {@link Duration} as integer milliseconds for SDK-internal protocol JSON, matching the
+- * legacy wire format (e.g. {@code "backoff":2000}).
+- *
+- * <p>This is a {@code @Singleton} bean so {@code @Serdeable.Serializable(using=...)} /
+- * {@code @Serdeable.Deserializable(using=...)} field bindings can resolve it via {@code
+- * BeanContext.findBean(...)} (see {@code LocalActivityMarkerMetadata#backoff}). Crucially it is
+- * typed as {@code Serde<Object>}, NOT {@code Serde<Duration>}: Micronaut's {@code
+- * DefaultSerdeRegistry} auto-indexes every {@code Serde<T>} bean as the GLOBAL serde for {@code T},
+- * which would make a consuming application's DI {@code io.micronaut.serde.ObjectMapper} emit ALL
+- * {@link Duration}s as millis (a leak). The registry explicitly skips beans whose type argument is
+- * {@code Object}, so an {@code Object}-typed serde is never globally registered, yet is still
+- * resolvable by class for {@code using=} field bindings. The millis format therefore applies only
+- * to the specific internal fields that opt in.
+- */
+-@Singleton
+-public final class DurationMillisSerde implements Serde<Object> {
+-
+-  @Override
+-  public void serialize(Encoder encoder, EncoderContext context, Argument<?> type, Object value)
+-      throws IOException {
+-    encoder.encodeLong(((Duration) value).toMillis());
+-  }
+-
+-  @Override
+-  public Duration deserialize(
+-      Decoder decoder, DecoderContext context, Argument<? super Object> type) throws IOException {
+-    return Duration.ofMillis(decoder.decodeLong());
+-  }
+-}
+diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java b/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
+index 3cf94b5..bdef840 100644
+--- a/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
++++ b/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
+@@ -10,9 +10,11 @@ import io.micronaut.serde.ObjectMapper;
+  * <p>This class never constructs a mapper itself. The application installs one via {@link
+  * #install(ObjectMapper)} before any SDK code path reaches {@link #get()}. Because the SDK ships
+  * the package's {@code @Singleton} {@link io.micronaut.serde.Serde} beans ({@link
+- * DurationMillisSerde}, {@link OperationTokenTypeSerde}) alongside its classes, any Micronaut
+- * {@link ObjectMapper} built with the SDK jar on the classpath already resolves them, so the
+- * application's own mapper is a correct value to install.
++ * OperationTokenTypeSerde}) alongside its classes, any Micronaut {@link ObjectMapper} built with
++ * the SDK jar on the classpath already resolves them, so the application's own mapper is a correct
++ * value to install. Such a mapper resolves those beans through its application context, so a type
++ * that local activity markers carry must not need one: markers keep being written after the context
++ * that installed the mapper stops, while another context in the same JVM runs workflows.
+  */
+ public final class InternalSerdeMapper {
+   private InternalSerdeMapper() {}
+diff --git a/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java b/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
+index b67507b..d4428e6 100644
+--- a/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
++++ b/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
+@@ -1,9 +1,9 @@
+ package io.temporal.internal.history;
+ 
++import com.fasterxml.jackson.annotation.JsonIgnore;
+ import com.fasterxml.jackson.annotation.JsonInclude;
+ import com.fasterxml.jackson.annotation.JsonProperty;
+ import io.micronaut.serde.annotation.Serdeable;
+-import io.temporal.common.converter.DurationMillisSerde;
+ import java.time.Duration;
+ import javax.annotation.Nullable;
+ 
+@@ -12,9 +12,10 @@ import javax.annotation.Nullable;
+  * href="https://github.com/temporalio/sdk-core/blob/main/protos/local/temporal/sdk/core/external_data/external_data.proto#L12">Core
+  * Data Structure</a>
+  *
+- * <p>Serialized only via the library-private internal Serde mapper, where {@code backoff} ({@link
+- * Duration}) is written as integer milliseconds for wire-format compatibility (see {@code
+- * DurationMillisSerde}).
++ * <p>Serialized via {@link io.temporal.common.converter.InternalSerdeMapper}, which holds whatever
++ * mapper the application installed. {@code backoff} is stored and written as integer milliseconds
++ * for wire-format compatibility, so serializing this type needs no custom serde bean and keeps
++ * working through a mapper whose application context has stopped.
+  */
+ @Serdeable
+ @JsonInclude(JsonInclude.Include.NON_NULL)
+@@ -34,9 +35,7 @@ public class LocalActivityMarkerMetadata {
+   // The retry starts with an attempt number > 1.
+   @Nullable
+   @JsonProperty("backoff")
+-  @Serdeable.Serializable(using = DurationMillisSerde.class)
+-  @Serdeable.Deserializable(using = DurationMillisSerde.class)
+-  private Duration backoff;
++  private Long backoffMillis;
+ 
+   public LocalActivityMarkerMetadata() {}
+ 
+@@ -62,11 +61,24 @@ public class LocalActivityMarkerMetadata {
+   }
+ 
+   @Nullable
+-  public Duration getBackoff() {
+-    return backoff;
++  public Long getBackoffMillis() {
++    return backoffMillis;
+   }
+ 
+-  public void setBackoff(@Nullable Duration backoff) {
+-    this.backoff = backoff;
++  public void setBackoffMillis(@Nullable Long backoffMillis) {
++    this.backoffMillis = backoffMillis;
++  }
++
++  // Named apart from the "backoff" JSON property so Micronaut Serde doesn't treat that name as
++  // ignored.
++  @Nullable
++  @JsonIgnore
++  public Duration getBackoffDuration() {
++    return backoffMillis == null ? null : Duration.ofMillis(backoffMillis);
++  }
++
++  @JsonIgnore
++  public void setBackoffDuration(@Nullable Duration backoff) {
++    this.backoffMillis = backoff == null ? null : backoff.toMillis();
+   }
+ }
+diff --git a/temporal-sdk/src/main/java/io/temporal/internal/statemachines/LocalActivityStateMachine.java b/temporal-sdk/src/main/java/io/temporal/internal/statemachines/LocalActivityStateMachine.java
+index ab0db39..064abd7 100644
+--- a/temporal-sdk/src/main/java/io/temporal/internal/statemachines/LocalActivityStateMachine.java
++++ b/temporal-sdk/src/main/java/io/temporal/internal/statemachines/LocalActivityStateMachine.java
+@@ -296,7 +296,7 @@ final class LocalActivityStateMachine
+                 .build();
+         markerAttributes.setFailure(failure);
+ 
+-        localActivityMarkerMetadata.setBackoff(failedResult.getBackoff());
++        localActivityMarkerMetadata.setBackoffDuration(failedResult.getBackoff());
+         executionFailure =
+             new LocalActivityCallback.LocalActivityFailedException(
+                 failure,
+@@ -354,7 +354,7 @@ final class LocalActivityStateMachine
+       long originalScheduledTimestamp =
+           metadata != null ? metadata.getOriginalScheduledTimestamp() : -1;
+       int lastAttempt = metadata != null ? metadata.getAttempt() : 0;
+-      Duration backoff = metadata != null ? metadata.getBackoff() : null;
++      Duration backoff = metadata != null ? metadata.getBackoffDuration() : null;
+       LocalActivityCallback.LocalActivityFailedException localActivityFailedException =
+           new LocalActivityCallback.LocalActivityFailedException(
+               attributes.getFailure(), originalScheduledTimestamp, lastAttempt, backoff);
+diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java
+index 36cac92..c248015 100644
+--- a/temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java
+@@ -25,7 +25,7 @@ public class DurationMillisTest {
+   @Test
+   public void internalDurationSerializesAsIntegerMillis() throws Exception {
+     LocalActivityMarkerMetadata metadata = new LocalActivityMarkerMetadata(1, 0L);
+-    metadata.setBackoff(Duration.ofSeconds(2));
++    metadata.setBackoffDuration(Duration.ofSeconds(2));
+ 
+     String json = new String(InternalSerdeMapper.get().writeValueAsBytes(metadata));
+     Assert.assertTrue(
+diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java
+index 8574bc1..6a81351 100644
+--- a/temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java
+@@ -8,12 +8,12 @@ import org.junit.Assert;
+ import org.junit.Test;
+ 
+ /**
+- * Load-bearing isolation test: the SDK ships {@code @Singleton Serde} beans (e.g. {@link
+- * DurationMillisSerde}) so the library-private {@link InternalSerdeMapper} can use the internal
+- * millis format. A consuming Micronaut application also has the SDK jar on its classpath and
+- * obtains its own {@link ObjectMapper} from its {@link ApplicationContext}. This test proves the
+- * SDK's internal serdes do NOT leak into that application-scoped mapper: a plain {@link Duration}
+- * must serialize with Serde's DEFAULT format (integer nanos), never the SDK-internal millis format.
++ * Load-bearing isolation test: the SDK writes some internal fields in its own formats (e.g. the
++ * local activity marker's backoff as integer millis). A consuming Micronaut application also has
++ * the SDK jar on its classpath and obtains its own {@link ObjectMapper} from its {@link
++ * ApplicationContext}. This test proves the SDK's internal formats do NOT leak into that
++ * application-scoped mapper: a plain {@link Duration} must serialize with Serde's DEFAULT format
++ * (integer nanos), never the SDK-internal millis format.
+  */
+ public class SerdeIsolationTest {
+ 
+@@ -52,7 +52,7 @@ public class SerdeIsolationTest {
+   public void internalMapperUsesMillisFormatForAnnotatedField() throws Exception {
+     io.temporal.internal.history.LocalActivityMarkerMetadata metadata =
+         new io.temporal.internal.history.LocalActivityMarkerMetadata(1, 0L);
+-    metadata.setBackoff(Duration.ofSeconds(2));
++    metadata.setBackoffDuration(Duration.ofSeconds(2));
+     String json = new String(InternalSerdeMapper.get().writeValueAsBytes(metadata));
+     Assert.assertTrue(
+         "Internal mapper should emit millis (2000) for the @Serdeable.Serializable(using=) field: "
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java b/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java
+index de185ab..39521df 100644
+--- a/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java
+@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotEquals;
+ import io.micronaut.serde.ObjectMapper;
+ import io.temporal.common.converter.InternalSerdeMapper;
+ import java.time.Duration;
++import java.util.Map;
+ import org.junit.Test;
+ 
+ /** Confirms LocalActivityMarkerMetadata serializes real content (not "{}") and round-trips. */
+@@ -15,7 +16,7 @@ public class LocalActivityMarkerMetadataRoundTripTest {
+   public void roundTripPreservesAllFields() throws Exception {
+     ObjectMapper mapper = InternalSerdeMapper.get();
+     LocalActivityMarkerMetadata m = new LocalActivityMarkerMetadata(7, 123456789L);
+-    m.setBackoff(Duration.ofMillis(2000));
++    m.setBackoffDuration(Duration.ofMillis(2000));
+ 
+     String json = new String(mapper.writeValueAsBytes(m));
+     assertNotEquals("must not serialize to empty object", "{}", json);
+@@ -24,6 +25,26 @@ public class LocalActivityMarkerMetadataRoundTripTest {
+         mapper.readValue(json.getBytes(), LocalActivityMarkerMetadata.class);
+     assertEquals(7, back.getAttempt());
+     assertEquals(123456789L, back.getOriginalScheduledTimestamp());
+-    assertEquals(Duration.ofMillis(2000), back.getBackoff());
++    assertEquals(Duration.ofMillis(2000), back.getBackoffDuration());
++  }
++
++  /**
++   * An application installs its own mapper into {@link InternalSerdeMapper}, and that mapper
++   * resolves beans through the application's context. Every local activity marker passes through
++   * it, so it must serialize this type even after the context behind it has stopped.
++   */
++  @Test
++  public void roundTripsThroughAMapperWhoseContextHasStopped() throws Exception {
++    ObjectMapper.CloseableObjectMapper mapper =
++        ObjectMapper.create(Map.of(), "io.temporal.common.converter");
++    mapper.close();
++    LocalActivityMarkerMetadata m = new LocalActivityMarkerMetadata(3, 42L);
++    m.setBackoffDuration(Duration.ofMillis(1500));
++
++    byte[] json = mapper.writeValueAsBytes(m);
++    LocalActivityMarkerMetadata back = mapper.readValue(json, LocalActivityMarkerMetadata.class);
++
++    assertEquals("{\"firstSkd\":42,\"atpt\":3,\"backoff\":1500}", new String(json));
++    assertEquals(Duration.ofMillis(1500), back.getBackoffDuration());
+   }
+ }
+-- 
+2.54.0 (Apple Git-157)
+
