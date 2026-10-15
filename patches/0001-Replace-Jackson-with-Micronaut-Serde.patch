@@ -1,16 +1,32 @@
-From 343b7d6cd8025b20fd050bad1dd400388bf1458a Mon Sep 17 00:00:00 2001
+From 9f8884fb190e6973d5b7f07bc94865577eefed68 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
 
-Swap the json/plain default converter and all SDK-internal protocol JSON
-from Jackson/Moshi to Micronaut Serde (Jackson 3 streaming + annotations,
-no jackson-databind). User payloads use the application's injected
-io.micronaut.serde.ObjectMapper; SDK-internal serialization (operation
-tokens, local-activity markers, failure encoding) uses a library-private
-mapper whose SDK-specific formats (Duration-as-millis, OperationTokenType-
-as-int) are field-scoped via Serde<Object> beans and proven not to leak
-into a consuming app's DI mapper.
+Swap the json/plain default converter from Jackson/Moshi to Micronaut
+Serde (Jackson 3 streaming + annotations, no jackson-databind). User
+payloads use the application's injected io.micronaut.serde.ObjectMapper,
+wrapped in MicronautSerdePayloadConverter and supplied through
+WorkflowClientOptions.Builder#setDataConverter or GlobalDataConverter.
+
+SDK-internal protocol JSON (operation tokens, Nexus failure details,
+local-activity marker metadata, search attribute values, marker scalars,
+tracing headers) does not use Serde at all. It is written and read with
+Jackson 3 streaming (jackson-core, a direct dependency), which needs no
+mapper and no application context. A JVM-global mapper slot would break
+whenever the Micronaut context that installed it stopped while another
+context in the same JVM kept running workflows, because Serde resolves
+serializers through its BeanContext at call time. Output is byte-identical
+to the previous Jackson output; golden tests pin it.
+
+The json/plain converter in STANDARD_PAYLOAD_CONVERTERS
+(StandardJsonPayloadConverter) handles only strings, numbers, booleans,
+OffsetDateTime, collections and arrays of those, string maps and
+LocalActivityMarkerMetadata. Any other value throws DataConverterException
+naming WorkflowClientOptions.Builder#setDataConverter, so application
+types need the application's own converter. Typed search attribute unset
+updates arrive as Optional and are written as json/plain null by
+SearchAttributePayloadConverter.
 
 Bumps the build to JDK 25 / Gradle 9 (Serde 3.x requires JVM 17+):
 wrapper 9.6.1, --release 25, Mockito 5.23.0, logback 1.5.18 (slf4j 2.0),
@@ -24,22 +40,18 @@ bare type variables (T1, T2): under Serde, Pair gets the getter-based
 this series, so DataConverter can serialize it and all 21 tests run in the
 normal suite.
 
-A library must not construct its own DI container: the naive
-MicronautSerdePayloadConverter() no-arg path called
-ObjectMapper.create(Map.of(), "io.temporal.common.converter"), which boots
-a full Micronaut ApplicationContext behind an innocuous-looking static
-field, invisible shared state that measured 187-223 ms and +1762 loaded
-classes in a non-Micronaut JVM the first time anything touched it. Because
-that path was reachable from DefaultDataConverter's static converter
-array, "anything" included the in-process test server's time-skipping
-"Timer task" thread, which then stalled SignalDuringLastWorkflowTaskTest.
-InternalSerdeMapper now constructs nothing: the application installs its
-mapper via InternalSerdeMapper.install(ObjectMapper) before any SDK code
-path reaches get(), which throws IllegalStateException if nothing was
-installed. The fork's own test JVMs install eagerly via a javaagent
-(temporal-sdk/src/serdeTestAgent/) rather than a lazy fallback, since a
-lazy install would still pay that cost on whichever thread reaches it
-first.
+A library must not construct its own DI container: building a Micronaut
+ApplicationContext behind a static field measured 187-223 ms and +1762
+loaded classes in a non-Micronaut JVM the first time anything touched it,
+and stalled the in-process test server's time-skipping "Timer task"
+thread. The SDK therefore builds no mapper or context. The fork's own
+test JVMs register an application-style GlobalDataConverter eagerly via a
+javaagent (temporal-sdk/src/testDataConverterAgent/), since a lazy build
+would pay that cost on whichever thread reaches it first. Tests that pass
+enums, records and similar through a default converter use
+GlobalDataConverter.get().
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 ---
  build.gradle                                  |  12 +-
  contrib/temporal-workflowstreams/build.gradle |   8 +-
@@ -49,7 +61,7 @@ first.
  .../workflowstreams/PublishInput.java         |   4 +
  .../io/temporal/workflowstreams/WireItem.java |   4 +
  .../workflowstreams/WorkflowStreamState.java  |   4 +
- gradle.properties                             |   7 +
+ gradle.properties                             |   8 +
  gradle/errorprone.gradle                      |   8 +-
  gradle/java.gradle                            |  30 +-
  gradle/linting.gradle                         |   4 +-
@@ -57,83 +69,93 @@ first.
  settings.gradle                               |  34 +-
  temporal-bom/build.gradle                     |  11 +-
  temporal-remote-data-encoder/build.gradle     |   2 +-
- temporal-sdk/build.gradle                     | 128 ++------
+ temporal-sdk/build.gradle                     | 131 +++-----
  .../Jackson3JsonPayloadConverterTest.java     | 216 -------------
  .../common/converter/CodecDataConverter.java  |  25 +-
  .../common/converter/DataConverter.java       |   4 +-
- .../converter/DefaultDataConverter.java       |   2 +-
- .../common/converter/DurationMillisSerde.java |  40 +++
- .../common/converter/InternalSerdeMapper.java |  52 +++
+ .../converter/DefaultDataConverter.java       |   7 +-
  .../Jackson3JsonPayloadConverter.java         |  50 ---
  .../JacksonJsonPayloadConverter.java          | 141 --------
- .../MicronautSerdePayloadConverter.java       | 128 ++++++++
- .../converter/OperationTokenTypeSerde.java    | 100 ++++++
+ .../MicronautSerdePayloadConverter.java       | 113 +++++++
  .../PayloadAndFailureDataConverter.java       |   8 +
  .../common/converter/PayloadConverter.java    |   4 +-
+ .../StandardJsonPayloadConverter.java         | 296 +++++++++++++++++
  .../temporal/failure/ApplicationFailure.java  |   2 +-
  .../client/RootActivityClientInvoker.java     |   2 +-
  .../internal/common/InternalUtils.java        |   4 +-
- .../internal/common/NexusFailureInfoJson.java |  15 +
- .../temporal/internal/common/NexusUtil.java   |  25 +-
- .../SearchAttributePayloadConverter.java      |  19 ++
- .../history/LocalActivityMarkerMetadata.java  |  19 +-
+ .../internal/common/NexusFailureInfoJson.java |  44 +++
+ .../temporal/internal/common/NexusUtil.java   |  24 +-
+ .../SearchAttributePayloadConverter.java      |  32 +-
+ .../internal/common/StreamingJson.java        |  77 +++++
+ .../history/LocalActivityMarkerMetadata.java  |  67 +++-
  .../internal/nexus/NexusTaskHandlerImpl.java  |   2 +-
- .../internal/nexus/OperationToken.java        |  40 ++-
+ .../internal/nexus/OperationToken.java        |  56 ++--
  .../internal/nexus/OperationTokenType.java    |   5 -
- .../internal/nexus/OperationTokenUtil.java    |  52 +--
+ .../internal/nexus/OperationTokenUtil.java    | 190 +++++++++--
  .../sync/WorkflowRetryerInternal.java         |  17 +-
  .../nexus/TemporalNexusClientImpl.java        |   6 +-
  .../temporal/payload/codec/PayloadCodec.java  |   4 +-
  .../Jackson3JsonPayloadConverter.java         | 134 --------
- .../io/temporal/testagent/SerdeTestAgent.java |  45 +++
- .../ActivityHeartbeatThrottlingTest.java      |   4 +-
+ .../ActivityHeartbeatThrottlingTest.java      |  11 +-
  .../temporal/activity/ActivityInfoTest.java   | 306 ++++++++++++++----
- .../common/converter/DurationMillisTest.java  |  51 +++
+ .../converter/CodecDataConverterTest.java     |   4 +-
  .../common/converter/EncodedValuesTest.java   |   4 +-
- .../converter/InternalSerdeMapperTest.java    |  28 ++
  .../JacksonJsonPayloadConverterTest.java      | 158 ---------
- .../converter/JsonDataConverterTest.java      |   7 +-
- .../MicronautSerdePayloadConverterTest.java   |  86 +++++
- .../common/converter/SerdeIsolationTest.java  |  74 +++++
+ .../converter/JsonDataConverterTest.java      |   9 +-
+ .../MicronautSerdePayloadConverterTest.java   |  79 +++++
+ .../converter/StandardJsonGoldenTest.java     | 265 +++++++++++++++
+ .../StandardJsonPayloadConverterTest.java     | 161 +++++++++
  .../OptionalJsonSerializationTest.java        |   1 +
- ...alActivityMarkerMetadataRoundTripTest.java |  29 ++
- .../internal/nexus/OperationTokenTest.java    | 214 ++++++++++--
+ .../WorkflowIdSignedPayloadsTest.java         |   2 +-
+ .../common/NexusFailureInfoGoldenTest.java    |  81 +++++
+ .../common/SearchAttributeGoldenTest.java     |  96 ++++++
+ ...alActivityMarkerMetadataRoundTripTest.java |  30 ++
+ .../nexus/OperationTokenGoldenTest.java       |  68 ++++
+ .../internal/nexus/OperationTokenTest.java    | 210 ++++++++++--
+ .../internal/nexus/PayloadSerializerTest.java |   4 +-
  .../internal/nexus/UpdateRunTokenTest.java    |  21 +-
  .../statemachines/AsyncWorkflowBuilder.java   |  14 +-
- .../VersionStateMachineTest.java              |   2 +-
+ .../VersionStateMachineTest.java              |   6 +-
  ...SerializableRetryOptionsRoundTripTest.java |  39 +++
  .../ContextAwareDataConverterTest.java        |   3 +
  .../io/temporal/worker/StickyWorkerTest.java  |  11 +
  .../io/temporal/worker/WorkerStressTests.java |   8 +
+ .../MultiContextProtocolJsonTest.java         |  89 +++++
+ .../workflow/failure/FailureEncodingTest.java |   6 +-
  .../nexus/OperationFailMetricTest.java        |   2 +-
- ...utDeserializationErrorPropagationTest.java |  18 +-
+ ...utDeserializationErrorPropagationTest.java |  22 +-
  .../TerminateWorkflowAsyncOperationTest.java  |  28 +-
  .../nexus/UpdateWorkflowOperationTest.java    |  19 +-
  .../updateTest/SpeculativeUpdateTest.java     |   2 +-
+ .../testagent/TestDataConverterAgent.java     |  69 ++++
  .../WorkerWithVirtualThreadsStressTests.java  |   8 +
  temporal-serviceclient/build.gradle           |  17 +-
  temporal-test-server/build.gradle             |  15 +-
  .../testservice/TestVisibilityStoreImpl.java  |  49 +++
+ .../functional/MultiOperationTest.java        |   4 +-
+ .../functional/WorkflowUpdateTest.java        |   6 +-
  temporal-testing/build.gradle                 |   2 +
- 74 files changed, 1580 insertions(+), 1071 deletions(-)
+ 82 files changed, 2602 insertions(+), 1131 deletions(-)
  create mode 100644 gradle.properties
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
- create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
- create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
  delete mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
  delete mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/JacksonJsonPayloadConverter.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java
- create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java
+ create mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/StandardJsonPayloadConverter.java
  create mode 100644 temporal-sdk/src/main/java/io/temporal/internal/common/NexusFailureInfoJson.java
+ create mode 100644 temporal-sdk/src/main/java/io/temporal/internal/common/StreamingJson.java
  delete mode 100644 temporal-sdk/src/main/java17/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
- create mode 100644 temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java
- create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java
- create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java
  delete mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java
- create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java
+ create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonGoldenTest.java
+ create mode 100644 temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonPayloadConverterTest.java
+ create mode 100644 temporal-sdk/src/test/java/io/temporal/internal/common/NexusFailureInfoGoldenTest.java
+ create mode 100644 temporal-sdk/src/test/java/io/temporal/internal/common/SearchAttributeGoldenTest.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java
+ create mode 100644 temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenGoldenTest.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/internal/sync/SerializableRetryOptionsRoundTripTest.java
+ create mode 100644 temporal-sdk/src/test/java/io/temporal/workflow/MultiContextProtocolJsonTest.java
+ create mode 100644 temporal-sdk/src/testDataConverterAgent/java/io/temporal/testagent/TestDataConverterAgent.java
 
 diff --git a/build.gradle b/build.gradle
 index feb5803..1ceddbc 100644
@@ -317,13 +339,14 @@ index da80394..1593c96 100644
    public List<WireItem> log = new ArrayList<>();
 diff --git a/gradle.properties b/gradle.properties
 new file mode 100644
-index 0000000..cebc62b
+index 0000000..5d24cb5
 --- /dev/null
 +++ b/gradle.properties
-@@ -0,0 +1,7 @@
+@@ -0,0 +1,8 @@
 +wireVersion=6.4.0
 +micronautSerdeVersion=3.0.0
 +micronautVersion=5.0.0
++jacksonCoreVersion=3.1.3
 +openTelemetryVersion=1.63.0
 +# JDK 25 + Gradle 9 + Micronaut Serde codegen need more heap than Gradle's 512MB default;
 +# the full parallel test suite OOMs otherwise.
@@ -349,7 +372,7 @@ index 0334b3e..7175c0d 100644
 \ No newline at end of file
 +}
 diff --git a/gradle/java.gradle b/gradle/java.gradle
-index 37db264..e364f5b 100644
+index 37db264..76a6bb6 100644
 --- a/gradle/java.gradle
 +++ b/gradle/java.gradle
 @@ -4,10 +4,12 @@ subprojects {
@@ -390,16 +413,16 @@ index 37db264..e364f5b 100644
          }
      }
  
-+    // Install the fork's InternalSerdeMapper eagerly, via a javaagent's premain, before any test
-+    // code runs on every Test task (not just `test` above): `testResourceIndependent`
++    // Register an application-style GlobalDataConverter eagerly, via a javaagent's premain, before
++    // any test code runs on every Test task (not just `test` above): `testResourceIndependent`
 +    // (temporal-sdk/build.gradle) and the `virtualThreadTests`/`testsWithVirtualThreads` suites are
-+    // separate Test tasks that `test { ... }` above does not reach. `serdeTestAgentJar` is
++    // separate Test tasks that `test { ... }` above does not reach. `testDataConverterAgentJar` is
 +    // registered by temporal-sdk's own build.gradle, so wait for that project to finish evaluating
 +    // before referencing its task, even when it is this same project (`test { ... }` above already
 +    // realizes `test` eagerly, so `configureEach` cannot defer this on its own). See
-+    // temporal-sdk/src/serdeTestAgent for the agent itself.
++    // temporal-sdk/src/testDataConverterAgent for the agent itself.
 +    project.rootProject.project(':temporal-sdk').afterEvaluate { sdkProject ->
-+        def agentJar = sdkProject.tasks.named('serdeTestAgentJar', Jar)
++        def agentJar = sdkProject.tasks.named('testDataConverterAgentJar', Jar)
 +        tasks.withType(Test).configureEach {
 +            dependsOn agentJar
 +            def agentJarFile = agentJar.flatMap { it.archiveFile }
@@ -533,7 +556,7 @@ index f7cae3b..418936d 100644
  }
  
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index 2c0da78..b22d762 100644
+index 2c0da78..edff788 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -2,7 +2,6 @@ description = '''Temporal Workflow Java SDK'''
@@ -544,7 +567,7 @@ index 2c0da78..b22d762 100644
      api(platform("io.micrometer:micrometer-bom:$micrometerVersion"))
  
      api project(':temporal-serviceclient')
-@@ -11,9 +10,10 @@ dependencies {
+@@ -11,9 +10,13 @@ dependencies {
      api "io.nexusrpc:nexus-sdk:$nexusVersion"
  
      implementation "com.google.guava:guava:$guavaVersion"
@@ -555,10 +578,13 @@ index 2c0da78..b22d762 100644
 +    annotationProcessor "io.micronaut:micronaut-inject-java:$micronautVersion"
 +    annotationProcessor "io.micronaut.serde:micronaut-serde-processor:$micronautSerdeVersion"
 +    api "io.micronaut.serde:micronaut-serde-jackson:$micronautSerdeVersion"
++    // Streaming reader and writer for SDK-internal protocol JSON. Declared directly so that these
++    // classes do not depend on Micronaut Serde's transitive dependency graph.
++    implementation "tools.jackson.core:jackson-core:$jacksonCoreVersion"
  
      // compileOnly and testImplementation because this dependency is needed only to work with json format of history
      // which shouldn't be needed for any production usage of temporal-sdk.
-@@ -24,6 +24,9 @@ dependencies {
+@@ -24,6 +27,9 @@ dependencies {
          exclude group: 'org.slf4j', module: 'slf4j-api'
      }
  
@@ -568,7 +594,7 @@ index 2c0da78..b22d762 100644
      testImplementation project(':temporal-testing')
      // The optional envconfig-backed test harness is loaded only while SDK tests are running.
      testRuntimeOnly project(':temporal-envconfig')
-@@ -40,13 +43,7 @@ dependencies {
+@@ -40,13 +46,7 @@ dependencies {
  
  // Temporal SDK supports Java 8 or later so to support virtual threads
  // we need to compile the code with Java 21 and package it in a multi-release jar.
@@ -582,7 +608,7 @@ index 2c0da78..b22d762 100644
      java21 {
          java {
              srcDirs = ['src/main/java21']
-@@ -55,15 +52,6 @@ sourceSets {
+@@ -55,15 +55,6 @@ sourceSets {
  }
  
  dependencies {
@@ -598,7 +624,7 @@ index 2c0da78..b22d762 100644
      java21Implementation files(sourceSets.main.output.classesDirs) { builtBy compileJava }
  }
  
-@@ -102,18 +90,34 @@ tasks.named('compilePayloadVisitorGeneratorJava') {
+@@ -102,18 +93,34 @@ tasks.named('compilePayloadVisitorGeneratorJava') {
      options.errorprone.error('MissingCasesInEnumSwitch')
  }
  
@@ -613,25 +639,25 @@ index 2c0da78..b22d762 100644
 -jar {
 -    into('META-INF/versions/17') {
 -        from sourceSets.java17.output
-+// Javaagent that installs InternalSerdeMapper eagerly, in premain, for the fork's own test JVMs
-+// (see gradle/java.gradle). It resolves io.temporal.common.converter.InternalSerdeMapper by name
-+// at runtime and has no compile-time dependency on this project's main sources, so it stays out of
++// Javaagent that registers an application-style GlobalDataConverter eagerly, in premain, for the
++// fork's own test JVMs (see gradle/java.gradle). It resolves the SDK's classes by name at runtime
++// and has no compile-time dependency on this project's main sources, so it stays out of
 +// components.java and publishes nothing (gradle/publishing.gradle:18-27 only publishes
 +// components.java).
 +sourceSets {
-+    serdeTestAgent {
++    testDataConverterAgent {
 +        java {
-+            srcDirs = ['src/serdeTestAgent/java']
++            srcDirs = ['src/testDataConverterAgent/java']
 +        }
      }
 +}
 +
-+tasks.register('serdeTestAgentJar', Jar) {
-+    archiveClassifier.set('serde-test-agent')
-+    from sourceSets.serdeTestAgent.output
++tasks.register('testDataConverterAgentJar', Jar) {
++    archiveClassifier.set('test-data-converter-agent')
++    from sourceSets.testDataConverterAgent.output
 +    manifest {
 +        attributes(
-+                'Premain-Class': 'io.temporal.testagent.SerdeTestAgent',
++                'Premain-Class': 'io.temporal.testagent.TestDataConverterAgent',
 +        )
 +    }
 +}
@@ -640,7 +666,7 @@ index 2c0da78..b22d762 100644
      into('META-INF/versions/21') {
          from sourceSets.java21.output
      }
-@@ -122,27 +126,6 @@ jar {
+@@ -122,27 +129,6 @@ jar {
      )
  }
  
@@ -668,7 +694,7 @@ index 2c0da78..b22d762 100644
  task registerNamespace(type: JavaExec) {
      getMainClass().set('io.temporal.internal.docker.RegisterTestNamespace')
      classpath = sourceSets.test.runtimeClasspath
-@@ -236,20 +219,6 @@ task testCloud(type: Test) {
+@@ -236,20 +222,6 @@ task testCloud(type: Test) {
      }
  }
  
@@ -689,7 +715,7 @@ index 2c0da78..b22d762 100644
  task testResourceIndependent(type: Test) {
      useJUnit {
          includeCategories 'io.temporal.worker.IndependentResourceBasedTests'
-@@ -289,14 +258,10 @@ testing {
+@@ -289,14 +261,10 @@ testing {
              }
          }
  
@@ -707,7 +733,7 @@ index 2c0da78..b22d762 100644
              }
              targets {
                  all {
-@@ -312,32 +277,6 @@ testing {
+@@ -312,32 +280,6 @@ testing {
              }
          }
  
@@ -740,7 +766,7 @@ index 2c0da78..b22d762 100644
          // Run the same test as the normal test task with virtual threads
          testsWithVirtualThreads(JvmTestSuite) {
              // Use the same source and resources as the main test set
-@@ -367,6 +306,5 @@ testing {
+@@ -367,6 +309,5 @@ testing {
  }
  
  tasks.named('check') {
@@ -1062,7 +1088,7 @@ index decf618..99969b0 100644
     * @param context provides information to the data converter about the abstraction the data
     *     belongs to
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
-index f05c3f9..dde9d83 100644
+index f05c3f9..336d181 100644
 --- a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
 @@ -18,7 +18,7 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
@@ -1070,114 +1096,22 @@ index f05c3f9..dde9d83 100644
      new ProtobufJsonPayloadConverter(),
      new ProtobufPayloadConverter(),
 -    new JacksonJsonPayloadConverter()
-+    new MicronautSerdePayloadConverter()
++    new StandardJsonPayloadConverter()
    };
  
    /**
-diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java b/temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
-new file mode 100644
-index 0000000..393b2fb
---- /dev/null
-+++ b/temporal-sdk/src/main/java/io/temporal/common/converter/DurationMillisSerde.java
-@@ -0,0 +1,40 @@
-+package io.temporal.common.converter;
-+
-+import io.micronaut.core.type.Argument;
-+import io.micronaut.serde.Decoder;
-+import io.micronaut.serde.Encoder;
-+import io.micronaut.serde.Serde;
-+import jakarta.inject.Singleton;
-+import java.io.IOException;
-+import java.time.Duration;
-+
-+/**
-+ * Serializes {@link Duration} as integer milliseconds for SDK-internal protocol JSON, matching the
-+ * legacy wire format (e.g. {@code "backoff":2000}).
-+ *
-+ * <p>This is a {@code @Singleton} bean so {@code @Serdeable.Serializable(using=...)} /
-+ * {@code @Serdeable.Deserializable(using=...)} field bindings can resolve it via {@code
-+ * BeanContext.findBean(...)} (see {@code LocalActivityMarkerMetadata#backoff}). Crucially it is
-+ * typed as {@code Serde<Object>}, NOT {@code Serde<Duration>}: Micronaut's {@code
-+ * DefaultSerdeRegistry} auto-indexes every {@code Serde<T>} bean as the GLOBAL serde for {@code T},
-+ * which would make a consuming application's DI {@code io.micronaut.serde.ObjectMapper} emit ALL
-+ * {@link Duration}s as millis (a leak). The registry explicitly skips beans whose type argument is
-+ * {@code Object}, so an {@code Object}-typed serde is never globally registered, yet is still
-+ * resolvable by class for {@code using=} field bindings. The millis format therefore applies only
-+ * to the specific internal fields that opt in.
-+ */
-+@Singleton
-+public final class DurationMillisSerde implements Serde<Object> {
-+
-+  @Override
-+  public void serialize(Encoder encoder, EncoderContext context, Argument<?> type, Object value)
-+      throws IOException {
-+    encoder.encodeLong(((Duration) value).toMillis());
-+  }
-+
-+  @Override
-+  public Duration deserialize(
-+      Decoder decoder, DecoderContext context, Argument<? super Object> type) throws IOException {
-+    return Duration.ofMillis(decoder.decodeLong());
-+  }
-+}
-diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java b/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
-new file mode 100644
-index 0000000..3cf94b5
---- /dev/null
-+++ b/temporal-sdk/src/main/java/io/temporal/common/converter/InternalSerdeMapper.java
-@@ -0,0 +1,52 @@
-+package io.temporal.common.converter;
-+
-+import io.micronaut.serde.ObjectMapper;
-+
-+/**
-+ * Holds the {@link ObjectMapper} used for SDK-internal protocol JSON (Nexus operation tokens,
-+ * local-activity markers). Format-stable and independent of any application {@link ObjectMapper}
-+ * the caller also uses for its own payloads.
-+ *
-+ * <p>This class never constructs a mapper itself. The application installs one via {@link
-+ * #install(ObjectMapper)} before any SDK code path reaches {@link #get()}. Because the SDK ships
-+ * the package's {@code @Singleton} {@link io.micronaut.serde.Serde} beans ({@link
-+ * DurationMillisSerde}, {@link OperationTokenTypeSerde}) alongside its classes, any Micronaut
-+ * {@link ObjectMapper} built with the SDK jar on the classpath already resolves them, so the
-+ * application's own mapper is a correct value to install.
-+ */
-+public final class InternalSerdeMapper {
-+  private InternalSerdeMapper() {}
-+
-+  private static volatile ObjectMapper instance;
-+
-+  /**
-+   * Installs the mapper returned by {@link #get()}. The application must call this once, before any
-+   * SDK code path reaches {@link #get()}.
+@@ -35,6 +35,11 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
+    *   <li>Search attribute values
+    *   <li>Stacktrace query return value
+    * </ul>
 +   *
-+   * @param mapper the mapper to use for SDK-internal protocol JSON.
-+   */
-+  public static void install(ObjectMapper mapper) {
-+    instance = mapper;
-+  }
-+
-+  /**
-+   * Returns the mapper installed via {@link #install(ObjectMapper)}.
-+   *
-+   * @throws IllegalStateException if {@link #install(ObjectMapper)} has not been called yet. The
-+   *     SDK does not construct a mapper on its own.
-+   */
-+  public static ObjectMapper get() {
-+    ObjectMapper mapper = instance;
-+    if (mapper == null) {
-+      throw new IllegalStateException(
-+          "InternalSerdeMapper.install(ObjectMapper) must be called before "
-+              + "InternalSerdeMapper.get() is used. The SDK does not build this mapper itself.");
-+    }
-+    return mapper;
-+  }
-+
-+  /** Test-only: clears the installed mapper so a test can observe {@link #get()}'s failure. */
-+  static void clear() {
-+    instance = null;
-+  }
-+}
++   * <p>Its {@code json/plain} converter handles only strings, numbers, booleans, {@link
++   * java.time.OffsetDateTime}, and collections, arrays and string maps of those. Passing any other
++   * value throws a {@link DataConverterException}; set a converter that handles application types
++   * with {@link io.temporal.client.WorkflowClientOptions.Builder#setDataConverter(DataConverter)}.
+    */
+   public static final DataConverter STANDARD_INSTANCE = newDefaultInstance();
+ 
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
 deleted file mode 100644
 index cd40953..0000000
@@ -1383,10 +1317,10 @@ index 7022d71..0000000
 -}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java
 new file mode 100644
-index 0000000..00b9f0c
+index 0000000..76a9e19
 --- /dev/null
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,113 @@
 +package io.temporal.common.converter;
 +
 +import com.google.protobuf.ByteString;
@@ -1399,13 +1333,11 @@ index 0000000..00b9f0c
 +import java.util.Collection;
 +import java.util.Map;
 +import java.util.Optional;
-+import javax.annotation.Nullable;
 +
 +/**
-+ * Temporal {@link PayloadConverter} backed by Micronaut Serde, replacing the default Jackson
-+ * converter under the same {@code json/plain} encoding. In production, construct with the
-+ * application's injected {@link ObjectMapper}; the no-arg constructor resolves the mapper installed
-+ * via {@link InternalSerdeMapper#install(ObjectMapper)} at first use, for SDK default paths.
++ * Temporal {@link PayloadConverter} backed by Micronaut Serde, replacing the default converter for
++ * application payloads under the same {@code json/plain} encoding. Construct it with the
++ * application's injected {@link ObjectMapper}.
 + */
 +public final class MicronautSerdePayloadConverter implements PayloadConverter {
 +
@@ -1413,23 +1345,10 @@ index 0000000..00b9f0c
 +  private static final ByteString ENCODING_METADATA =
 +      ByteString.copyFrom(ENCODING_TYPE, StandardCharsets.UTF_8);
 +
-+  @Nullable private final ObjectMapper objectMapper;
++  private final ObjectMapper objectMapper;
 +
 +  public MicronautSerdePayloadConverter(ObjectMapper objectMapper) {
 +    this.objectMapper = objectMapper;
-+  }
-+
-+  /**
-+   * Reachable from {@link DefaultDataConverter}'s static {@code STANDARD_PAYLOAD_CONVERTERS} array.
-+   * Resolves {@link InternalSerdeMapper#get()} at first use rather than at construction, so the
-+   * application has an opportunity to call {@link InternalSerdeMapper#install(ObjectMapper)} first.
-+   */
-+  public MicronautSerdePayloadConverter() {
-+    this.objectMapper = null;
-+  }
-+
-+  private ObjectMapper mapper() {
-+    return objectMapper != null ? objectMapper : InternalSerdeMapper.get();
 +  }
 +
 +  @Override
@@ -1460,7 +1379,7 @@ index 0000000..00b9f0c
 +              .build());
 +    }
 +    try {
-+      byte[] bytes = mapper().writeValueAsBytes(value);
++      byte[] bytes = objectMapper.writeValueAsBytes(value);
 +      return Optional.of(
 +          Payload.newBuilder()
 +              .putMetadata(EncodingKeys.METADATA_ENCODING_KEY, ENCODING_METADATA)
@@ -1484,7 +1403,7 @@ index 0000000..00b9f0c
 +      // A JSON "null" payload is a valid encoding of a null value (e.g. an absent Optional, or a
 +      // null search-attribute value). Return it as-is; do NOT treat null as an error, matching the
 +      // removed Moshi/Jackson behavior. Empty payload data is rejected above.
-+      return (T) mapper().readValue(data.toByteArray(), argument);
++      return (T) objectMapper.readValue(data.toByteArray(), argument);
 +    } catch (IOException e) {
 +      throw new DataConverterException(e);
 +    }
@@ -1513,112 +1432,6 @@ index 0000000..00b9f0c
 +          (Argument<?>) Argument.of(type, Argument.OBJECT_ARGUMENT, Argument.OBJECT_ARGUMENT);
 +    }
 +    return argument;
-+  }
-+}
-diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java b/temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java
-new file mode 100644
-index 0000000..3b90276
---- /dev/null
-+++ b/temporal-sdk/src/main/java/io/temporal/common/converter/OperationTokenTypeSerde.java
-@@ -0,0 +1,100 @@
-+package io.temporal.common.converter;
-+
-+import io.micronaut.core.type.Argument;
-+import io.micronaut.serde.Decoder;
-+import io.micronaut.serde.Encoder;
-+import io.micronaut.serde.Serde;
-+import io.temporal.internal.nexus.OperationTokenType;
-+import jakarta.inject.Singleton;
-+import java.io.IOException;
-+import java.math.BigInteger;
-+import java.util.List;
-+import java.util.Map;
-+
-+/**
-+ * Serializes {@link OperationTokenType} as its integer value (e.g. {@code "t":1}) for SDK-internal
-+ * Nexus operation tokens, matching the legacy wire format and cross-SDK token compatibility.
-+ *
-+ * <p>Bound to the {@code OperationToken#type} field via {@code @Serdeable.Serializable(using=...)}
-+ * / {@code @Serdeable.Deserializable(using=...)}. It is a {@code @Singleton} so the field binding
-+ * can resolve it via {@code BeanContext.findBean(...)}, but it is typed {@code Serde<Object>}, NOT
-+ * {@code Serde<OperationTokenType>}: Micronaut's {@code DefaultSerdeRegistry} auto-indexes every
-+ * typed {@code Serde<T>} bean as the GLOBAL serde for {@code T} in every context that sees it
-+ * (including a consuming application's), but explicitly skips {@code Object}-typed serde beans.
-+ * Using {@code Object} keeps this serde resolvable by class for the field binding while never
-+ * registering it globally, so no SDK serde pollutes an application's DI {@code
-+ * io.micronaut.serde.ObjectMapper}.
-+ */
-+@Singleton
-+public final class OperationTokenTypeSerde implements Serde<Object> {
-+
-+  @Override
-+  public void serialize(Encoder encoder, EncoderContext context, Argument<?> type, Object value)
-+      throws IOException {
-+    encoder.encodeInt(((OperationTokenType) value).toValue());
-+  }
-+
-+  @Override
-+  public OperationTokenType deserialize(
-+      Decoder decoder, DecoderContext context, Argument<? super Object> type) throws IOException {
-+    // decoder.decodeInt() would silently coerce a JSON boolean into 0/1 and silently truncate an
-+    // out-of-int-range integral value, both of which diverge from upstream Jackson's Integer
-+    // coercion. decodeArbitrary() preserves the JSON value's real type (Boolean, Number, String,
-+    // ...) so we can replicate Jackson's coercion table exactly:
-+    //  - Boolean:            reject (the one place we intentionally beat upstream's own coercion)
-+    //  - integral Number:    accept only if it fits in an int, else reject as out-of-range
-+    //  - floating Number:    truncate toward zero into an int, as Jackson does
-+    //  - String:             parse as an integer, reject if unparseable
-+    //  - anything else:      reject
-+    Object value = decoder.decodeArbitrary();
-+    if (value == null) {
-+      return null;
-+    }
-+    return OperationTokenType.fromValue(toIntValue(value));
-+  }
-+
-+  private static int toIntValue(Object value) {
-+    if (value instanceof Boolean) {
-+      throw new IllegalArgumentException(
-+          "Cannot deserialize value of type Integer from Boolean value: " + value);
-+    }
-+    if (value instanceof Integer) {
-+      return (Integer) value;
-+    }
-+    if (value instanceof Long || value instanceof BigInteger) {
-+      return intValueExact((Number) value);
-+    }
-+    if (value instanceof Number) {
-+      // Floating-point ("t":1.0, "t":1.5, "t":1e0): Jackson truncates toward zero when coercing
-+      // into an Integer field rather than rejecting a non-whole number.
-+      return ((Number) value).intValue();
-+    }
-+    if (value instanceof String) {
-+      try {
-+        return Integer.parseInt(((String) value).trim());
-+      } catch (NumberFormatException e) {
-+        throw new IllegalArgumentException(
-+            "Cannot deserialize value of type Integer from String \""
-+                + value
-+                + "\": not a valid Integer value");
-+      }
-+    }
-+    String shape =
-+        value instanceof Map ? "Object" : value instanceof List ? "Array" : value.toString();
-+    throw new IllegalArgumentException(
-+        "Cannot deserialize value of type Integer from " + shape + " value: " + value);
-+  }
-+
-+  private static final BigInteger INT_MIN = BigInteger.valueOf(Integer.MIN_VALUE);
-+  private static final BigInteger INT_MAX = BigInteger.valueOf(Integer.MAX_VALUE);
-+
-+  /** Rejects a Long/BigInteger that doesn't fit in an int rather than silently truncating it. */
-+  private static int intValueExact(Number value) {
-+    BigInteger big =
-+        value instanceof BigInteger ? (BigInteger) value : BigInteger.valueOf(value.longValue());
-+    if (big.compareTo(INT_MIN) < 0 || big.compareTo(INT_MAX) > 0) {
-+      throw new IllegalArgumentException("Numeric value (" + value + ") out of range of int");
-+    }
-+    return big.intValue();
 +  }
 +}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java
@@ -1661,6 +1474,308 @@ index bf14a17..6305124 100644
     *
     * @param context provides information to the data converter about the abstraction the data
     *     belongs to
+diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/StandardJsonPayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/StandardJsonPayloadConverter.java
+new file mode 100644
+index 0000000..216687a
+--- /dev/null
++++ b/temporal-sdk/src/main/java/io/temporal/common/converter/StandardJsonPayloadConverter.java
+@@ -0,0 +1,296 @@
++package io.temporal.common.converter;
++
++import com.google.protobuf.ByteString;
++import io.temporal.api.common.v1.Payload;
++import io.temporal.internal.common.StreamingJson;
++import io.temporal.internal.history.LocalActivityMarkerMetadata;
++import java.lang.reflect.ParameterizedType;
++import java.lang.reflect.Type;
++import java.lang.reflect.TypeVariable;
++import java.lang.reflect.WildcardType;
++import java.nio.charset.StandardCharsets;
++import java.time.DateTimeException;
++import java.time.OffsetDateTime;
++import java.time.format.DateTimeFormatter;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.HashMap;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++import tools.jackson.core.JacksonException;
++import tools.jackson.core.JsonGenerator;
++import tools.jackson.core.JsonParser;
++import tools.jackson.core.JsonToken;
++
++/**
++ * The {@code json/plain} converter in {@link DefaultDataConverter#STANDARD_PAYLOAD_CONVERTERS}. It
++ * handles only the values the SDK itself persists: strings, numbers, booleans, {@link
++ * OffsetDateTime}, collections and arrays of those, string maps and {@link
++ * LocalActivityMarkerMetadata}. Anything else is application data and needs a converter supplied
++ * through {@code WorkflowClientOptions.Builder#setDataConverter}.
++ *
++ * <p>Reads and writes with Jackson streaming, so it works without a Micronaut application context.
++ */
++final class StandardJsonPayloadConverter implements PayloadConverter {
++  private static final String ENCODING_TYPE = "json/plain";
++  private static final ByteString ENCODING_METADATA =
++      ByteString.copyFrom(ENCODING_TYPE, StandardCharsets.UTF_8);
++
++  @Override
++  public String getEncodingType() {
++    return ENCODING_TYPE;
++  }
++
++  @Override
++  public Optional<Payload> toData(Object value) throws DataConverterException {
++    if (value == null) {
++      return Optional.empty();
++    }
++    byte[] json;
++    try {
++      json = StreamingJson.write(generator -> writeValue(generator, value));
++    } catch (JacksonException e) {
++      throw new DataConverterException(e);
++    }
++    return Optional.of(
++        Payload.newBuilder()
++            .putMetadata(EncodingKeys.METADATA_ENCODING_KEY, ENCODING_METADATA)
++            .setData(ByteString.copyFrom(json))
++            .build());
++  }
++
++  @Override
++  @SuppressWarnings("unchecked")
++  public <T> T fromData(Payload content, Class<T> valueClass, Type valueType)
++      throws DataConverterException {
++    ByteString data = content.getData();
++    if (data.isEmpty()) {
++      throw new DataConverterException("Empty payload data for type " + valueType);
++    }
++    Type type = valueType != null ? valueType : valueClass;
++    try (JsonParser parser = StreamingJson.parse(data.toByteArray())) {
++      if (parser.nextToken() == null) {
++        throw new DataConverterException("No JSON content in payload data for type " + valueType);
++      }
++      return (T) readValue(parser, type);
++    } catch (DataConverterException e) {
++      throw e;
++    } catch (JacksonException | IllegalArgumentException | DateTimeException e) {
++      throw new DataConverterException(e);
++    }
++  }
++
++  private static void writeValue(JsonGenerator generator, Object value) {
++    if (value == null) {
++      generator.writeNull();
++    } else if (value instanceof CharSequence) {
++      generator.writeString(value.toString());
++    } else if (value instanceof Integer) {
++      generator.writeNumber((Integer) value);
++    } else if (value instanceof Long) {
++      generator.writeNumber((Long) value);
++    } else if (value instanceof Short) {
++      generator.writeNumber((Short) value);
++    } else if (value instanceof Byte) {
++      generator.writeNumber(((Byte) value).intValue());
++    } else if (value instanceof Double) {
++      generator.writeNumber((Double) value);
++    } else if (value instanceof Float) {
++      generator.writeNumber((Float) value);
++    } else if (value instanceof Boolean) {
++      generator.writeBoolean((Boolean) value);
++    } else if (value instanceof OffsetDateTime) {
++      generator.writeString(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format((OffsetDateTime) value));
++    } else if (value instanceof Collection) {
++      generator.writeStartArray();
++      for (Object element : (Collection<?>) value) {
++        writeValue(generator, element);
++      }
++      generator.writeEndArray();
++    } else if (value instanceof Object[]) {
++      generator.writeStartArray();
++      for (Object element : (Object[]) value) {
++        writeValue(generator, element);
++      }
++      generator.writeEndArray();
++    } else if (value instanceof Map) {
++      writeStringMap(generator, (Map<?, ?>) value);
++    } else if (value instanceof LocalActivityMarkerMetadata) {
++      ((LocalActivityMarkerMetadata) value).writeTo(generator);
++    } else {
++      throw unsupported("serialize", value.getClass());
++    }
++  }
++
++  private static void writeStringMap(JsonGenerator generator, Map<?, ?> map) {
++    generator.writeStartObject();
++    for (Map.Entry<?, ?> entry : map.entrySet()) {
++      Object entryValue = entry.getValue();
++      if (!(entry.getKey() instanceof String)
++          || (entryValue != null && !(entryValue instanceof CharSequence))) {
++        throw unsupported("serialize", map.getClass());
++      }
++      generator.writeName((String) entry.getKey());
++      StreamingJson.writeStringOrNull(generator, entryValue == null ? null : entryValue.toString());
++    }
++    generator.writeEndObject();
++  }
++
++  private static Object readValue(JsonParser parser, Type type) {
++    if (parser.currentToken() == JsonToken.VALUE_NULL) {
++      return null;
++    }
++    Class<?> rawType = rawClass(type);
++    if (rawType == String.class) {
++      return readString(parser);
++    } else if (rawType == Integer.class || rawType == int.class) {
++      return StreamingJson.readInt(parser);
++    } else if (rawType == Long.class || rawType == long.class) {
++      return StreamingJson.readLong(parser);
++    } else if (rawType == Double.class || rawType == double.class) {
++      return readDouble(parser);
++    } else if (rawType == Boolean.class || rawType == boolean.class) {
++      return readBoolean(parser);
++    } else if (rawType == OffsetDateTime.class) {
++      return OffsetDateTime.parse(readString(parser));
++    } else if (rawType == LocalActivityMarkerMetadata.class) {
++      return LocalActivityMarkerMetadata.readFrom(parser);
++    } else if (rawType == List.class || rawType == Collection.class || rawType == ArrayList.class) {
++      return readList(parser, typeArgument(type, 0));
++    } else if ((rawType == Map.class || rawType == HashMap.class)
++        && rawClass(typeArgument(type, 0)) == String.class
++        && rawClass(typeArgument(type, 1)) == String.class) {
++      return readStringMap(parser);
++    } else if (rawType == Object.class) {
++      return readUntyped(parser);
++    }
++    throw unsupported("deserialize", type);
++  }
++
++  private static String readString(JsonParser parser) {
++    requireToken(parser, JsonToken.VALUE_STRING);
++    return parser.getString();
++  }
++
++  private static boolean readBoolean(JsonParser parser) {
++    JsonToken token = parser.currentToken();
++    if (token != JsonToken.VALUE_TRUE && token != JsonToken.VALUE_FALSE) {
++      throw new IllegalArgumentException("Expected a JSON boolean but found " + token);
++    }
++    return token == JsonToken.VALUE_TRUE;
++  }
++
++  /**
++   * Accepts the quoted {@code "NaN"} and {@code "Infinity"} forms written for non-finite values.
++   */
++  private static double readDouble(JsonParser parser) {
++    JsonToken token = parser.currentToken();
++    if (token == JsonToken.VALUE_NUMBER_INT || token == JsonToken.VALUE_NUMBER_FLOAT) {
++      return parser.getDoubleValue();
++    }
++    String text = readString(parser);
++    switch (text) {
++      case "NaN":
++        return Double.NaN;
++      case "Infinity":
++        return Double.POSITIVE_INFINITY;
++      case "-Infinity":
++        return Double.NEGATIVE_INFINITY;
++      default:
++        throw new IllegalArgumentException("Expected a JSON number but found \"" + text + "\"");
++    }
++  }
++
++  private static List<Object> readList(JsonParser parser, Type elementType) {
++    requireToken(parser, JsonToken.START_ARRAY);
++    List<Object> elements = new ArrayList<>();
++    while (parser.nextToken() != JsonToken.END_ARRAY) {
++      elements.add(readValue(parser, elementType));
++    }
++    return elements;
++  }
++
++  private static Map<String, String> readStringMap(JsonParser parser) {
++    requireToken(parser, JsonToken.START_OBJECT);
++    Map<String, String> entries = new LinkedHashMap<>();
++    while (parser.nextToken() == JsonToken.PROPERTY_NAME) {
++      String name = parser.currentName();
++      parser.nextToken();
++      entries.put(name, parser.currentToken() == JsonToken.VALUE_NULL ? null : readString(parser));
++    }
++    return entries;
++  }
++
++  /** Reads any JSON value as a {@code String}, {@code Number}, {@code Boolean}, List or Map. */
++  private static Object readUntyped(JsonParser parser) {
++    switch (parser.currentToken()) {
++      case VALUE_NULL:
++        return null;
++      case VALUE_STRING:
++        return parser.getString();
++      case VALUE_NUMBER_INT:
++      case VALUE_NUMBER_FLOAT:
++        return parser.getNumberValue();
++      case VALUE_TRUE:
++        return Boolean.TRUE;
++      case VALUE_FALSE:
++        return Boolean.FALSE;
++      case START_ARRAY:
++        return readList(parser, Object.class);
++      case START_OBJECT:
++        Map<String, Object> entries = new LinkedHashMap<>();
++        while (parser.nextToken() == JsonToken.PROPERTY_NAME) {
++          String name = parser.currentName();
++          parser.nextToken();
++          entries.put(name, readUntyped(parser));
++        }
++        return entries;
++      default:
++        throw new IllegalArgumentException("Unexpected JSON token " + parser.currentToken());
++    }
++  }
++
++  private static void requireToken(JsonParser parser, JsonToken expected) {
++    if (parser.currentToken() != expected) {
++      throw new IllegalArgumentException(
++          "Expected " + expected + " but found " + parser.currentToken());
++    }
++  }
++
++  private static Class<?> rawClass(Type type) {
++    if (type instanceof Class) {
++      return (Class<?>) type;
++    } else if (type instanceof ParameterizedType) {
++      return rawClass(((ParameterizedType) type).getRawType());
++    } else if (type instanceof WildcardType) {
++      return rawClass(((WildcardType) type).getUpperBounds()[0]);
++    } else if (type instanceof TypeVariable) {
++      return rawClass(((TypeVariable<?>) type).getBounds()[0]);
++    }
++    return Void.class;
++  }
++
++  /** Returns the {@code index}th type argument, {@code Object} if there is none. */
++  private static Type typeArgument(Type type, int index) {
++    if (type instanceof ParameterizedType) {
++      Type[] arguments = ((ParameterizedType) type).getActualTypeArguments();
++      if (index < arguments.length) {
++        return arguments[index];
++      }
++    }
++    return Object.class;
++  }
++
++  private static DataConverterException unsupported(String action, Type type) {
++    return new DataConverterException(
++        "The default data converter cannot "
++            + action
++            + " "
++            + type.getTypeName()
++            + ". It handles only strings, numbers, booleans, OffsetDateTime, and collections,"
++            + " arrays and string maps of those. Set a DataConverter that handles the type with"
++            + " WorkflowClientOptions.Builder#setDataConverter.");
++  }
++}
 diff --git a/temporal-sdk/src/main/java/io/temporal/failure/ApplicationFailure.java b/temporal-sdk/src/main/java/io/temporal/failure/ApplicationFailure.java
 index 91d496b..7365e79 100644
 --- a/temporal-sdk/src/main/java/io/temporal/failure/ApplicationFailure.java
@@ -1717,27 +1832,56 @@ index 08679ca..44ef5be 100644
            HandlerException.ErrorType.BAD_REQUEST, "failed to generate workflow operation token", e);
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/common/NexusFailureInfoJson.java b/temporal-sdk/src/main/java/io/temporal/internal/common/NexusFailureInfoJson.java
 new file mode 100644
-index 0000000..4756f64
+index 0000000..4d2be3d
 --- /dev/null
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/common/NexusFailureInfoJson.java
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,44 @@
 +package io.temporal.internal.common;
 +
-+import com.fasterxml.jackson.annotation.JsonInclude;
-+import io.micronaut.serde.annotation.Serdeable;
++import java.nio.charset.StandardCharsets;
 +import java.util.Map;
++import javax.annotation.Nullable;
 +
 +/**
 + * Wire shape of a Nexus {@code FailureInfo} serialized into a {@code json/plain} payload by {@link
-+ * NexusUtil}. Fields are emitted in declaration order with nulls included, matching the legacy
-+ * hand-streamed JSON ({@code {"message":...,"stackTrace":...,"metadata":{...},"detailsJson":...}}).
++ * NexusUtil}. Fields are emitted in declaration order with nulls included: {@code
++ * {"message":...,"stackTrace":...,"metadata":{...},"detailsJson":...}}.
 + */
-+@Serdeable
-+@JsonInclude(JsonInclude.Include.ALWAYS)
 +record NexusFailureInfoJson(
-+    String message, String stackTrace, Map<String, String> metadata, String detailsJson) {}
++    @Nullable String message,
++    @Nullable String stackTrace,
++    @Nullable Map<String, String> metadata,
++    @Nullable String detailsJson) {
++
++  String toJson() {
++    byte[] json =
++        StreamingJson.write(
++            generator -> {
++              generator.writeStartObject();
++              generator.writeName("message");
++              StreamingJson.writeStringOrNull(generator, message);
++              generator.writeName("stackTrace");
++              StreamingJson.writeStringOrNull(generator, stackTrace);
++              generator.writeName("metadata");
++              if (metadata == null) {
++                generator.writeNull();
++              } else {
++                generator.writeStartObject();
++                for (Map.Entry<String, String> entry : metadata.entrySet()) {
++                  generator.writeName(entry.getKey());
++                  StreamingJson.writeStringOrNull(generator, entry.getValue());
++                }
++                generator.writeEndObject();
++              }
++              generator.writeName("detailsJson");
++              StreamingJson.writeStringOrNull(generator, detailsJson);
++              generator.writeEndObject();
++            });
++    return new String(json, StandardCharsets.UTF_8);
++  }
++}
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/common/NexusUtil.java b/temporal-sdk/src/main/java/io/temporal/internal/common/NexusUtil.java
-index 9bb3e2d..e568cc6 100644
+index 9bb3e2d..0d89689 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/common/NexusUtil.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/common/NexusUtil.java
 @@ -1,8 +1,5 @@
@@ -1749,13 +1893,7 @@ index 9bb3e2d..e568cc6 100644
  import com.google.protobuf.ByteString;
  import com.google.protobuf.InvalidProtocolBufferException;
  import com.google.protobuf.util.JsonFormat;
-@@ -14,14 +11,16 @@ import io.temporal.api.enums.v1.NexusHandlerErrorRetryBehavior;
- import io.temporal.api.nexus.v1.Failure;
- import io.temporal.api.nexus.v1.HandlerError;
- import io.temporal.common.converter.DataConverter;
-+import io.temporal.common.converter.InternalSerdeMapper;
-+import java.io.IOException;
- import java.net.URI;
+@@ -18,10 +15,10 @@ import java.net.URI;
  import java.net.URISyntaxException;
  import java.time.Duration;
  import java.util.Collections;
@@ -1767,25 +1905,25 @@ index 9bb3e2d..e568cc6 100644
    private static final JsonFormat.Printer PROTO_JSON_PRINTER =
        JsonFormat.printer().omittingInsignificantWhitespace();
    private static final String TEMPORAL_FAILURE_TYPE_STRING =
-@@ -123,10 +122,10 @@ public class NexusUtil {
+@@ -123,12 +120,7 @@ public class NexusUtil {
  
      // Create a copy without the message before serializing
      FailureInfo failureCopy = FailureInfo.newBuilder(failureInfo).setMessage("").build();
 -    String json = null;
-+    String json;
-     try {
+-    try {
 -      json = JSON_OBJECT_WRITER.writeValueAsString(failureCopy);
 -    } catch (JsonProcessingException e) {
-+      json = failureInfoToJson(failureCopy);
-+    } catch (IOException e) {
-       throw new RuntimeException(e);
-     }
+-      throw new RuntimeException(e);
+-    }
++    String json = failureInfoToJson(failureCopy);
  
-@@ -197,5 +196,17 @@ public class NexusUtil {
+     return io.temporal.api.common.v1.Payloads.newBuilder()
+         .addPayloads(
+@@ -197,5 +189,17 @@ public class NexusUtil {
      }
    }
  
-+  private static String failureInfoToJson(FailureInfo failureInfo) throws IOException {
++  private static String failureInfoToJson(FailureInfo failureInfo) {
 +    // Preserve insertion order of metadata to match the legacy hand-streamed JSON.
 +    Map<String, String> metadata = new LinkedHashMap<>(failureInfo.getMetadata());
 +    NexusFailureInfoJson dto =
@@ -1794,28 +1932,55 @@ index 9bb3e2d..e568cc6 100644
 +            failureInfo.getStackTrace(),
 +            metadata,
 +            failureInfo.getDetailsJson());
-+    return new String(InternalSerdeMapper.get().writeValueAsBytes(dto));
++    return dto.toJson();
 +  }
 +
    private NexusUtil() {}
  }
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/common/SearchAttributePayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/internal/common/SearchAttributePayloadConverter.java
-index c96f47f..3f84cb8 100644
+index c96f47f..af7ec6e 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/common/SearchAttributePayloadConverter.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/common/SearchAttributePayloadConverter.java
-@@ -201,6 +201,25 @@ final class SearchAttributePayloadConverter {
+@@ -24,6 +24,12 @@ final class SearchAttributePayloadConverter {
+ 
+   private static final String METADATA_TYPE_KEY = "type";
+ 
++  private static final Payload JSON_NULL_PAYLOAD =
++      Payload.newBuilder()
++          .putMetadata("encoding", ByteString.copyFromUtf8("json/plain"))
++          .setData(ByteString.copyFromUtf8("null"))
++          .build();
++
+   public static final SearchAttributePayloadConverter INSTANCE =
+       new SearchAttributePayloadConverter();
+ 
+@@ -32,9 +38,15 @@ final class SearchAttributePayloadConverter {
+       // If we don't have the type we should just leave the payload as is
+       return (Payload) value;
+     }
+-    // We can encode as-is because we know it's strictly typed to expected key value. We
+-    // accept a null value because updates for unset can be null.
+-    return DefaultDataConverter.STANDARD_INSTANCE.toPayload(value).get().toBuilder()
++    // We can encode as-is because we know it's strictly typed to expected key value. Updates
++    // arrive as an Optional, and an empty one (unset) is written as a json/plain null, which is
++    // what the server has always received for it.
++    Object unwrapped = value instanceof Optional ? ((Optional<?>) value).orElse(null) : value;
++    Payload valuePayload =
++        unwrapped == null
++            ? JSON_NULL_PAYLOAD
++            : DefaultDataConverter.STANDARD_INSTANCE.toPayload(unwrapped).get();
++    return valuePayload.toBuilder()
+         .putMetadata(
+             METADATA_TYPE_KEY,
+             ByteString.copyFromUtf8(indexValueTypeToEncodedValue(key.getValueType())))
+@@ -201,6 +213,20 @@ final class SearchAttributePayloadConverter {
      Class<?> type = indexValueTypeToJavaType(indexType);
      Preconditions.checkArgument(type != null);
  
-+    // The payload records the type the value was encoded as (METADATA_TYPE_KEY, derived from the
-+    // value's Java type at encode time). If it maps to a different Java type than the requested
-+    // one,
-+    // the value is not of the requested type and must be rejected. We check this explicitly because
-+    // Micronaut Serde leniently coerces some JSON scalars across types (notably boolean -> long),
-+    // so
-+    // the decode below would silently succeed (e.g. accepting `true` for an INT attribute) instead
-+    // of throwing. Compared by mapped Java type so string-family types (TEXT/KEYWORD) stay
-+    // interchangeable. A payload without type metadata (declaredType null) skips the check.
++    // The payload records the Java type the value was encoded from (METADATA_TYPE_KEY). If that
++    // maps to a different Java type than the requested one, the value is rejected. TEXT and KEYWORD
++    // both map to String, so they stay interchangeable. A payload without type metadata skips the
++    // check.
 +    Class<?> declaredJavaType =
 +        indexValueTypeToJavaType(getIndexType(payload.getMetadataMap().get(METADATA_TYPE_KEY)));
 +    if (declaredJavaType != null && declaredJavaType != type) {
@@ -1829,57 +1994,191 @@ index c96f47f..3f84cb8 100644
      try {
        // single-value search attribute
        return Collections.singletonList(
+diff --git a/temporal-sdk/src/main/java/io/temporal/internal/common/StreamingJson.java b/temporal-sdk/src/main/java/io/temporal/internal/common/StreamingJson.java
+new file mode 100644
+index 0000000..534a335
+--- /dev/null
++++ b/temporal-sdk/src/main/java/io/temporal/internal/common/StreamingJson.java
+@@ -0,0 +1,77 @@
++package io.temporal.internal.common;
++
++import java.io.ByteArrayOutputStream;
++import java.util.function.Consumer;
++import javax.annotation.Nullable;
++import tools.jackson.core.JsonGenerator;
++import tools.jackson.core.JsonParser;
++import tools.jackson.core.JsonToken;
++import tools.jackson.core.ObjectReadContext;
++import tools.jackson.core.ObjectWriteContext;
++import tools.jackson.core.json.JsonFactory;
++
++/**
++ * Entry point for the Jackson streaming reader and writer behind SDK-internal protocol JSON:
++ * operation tokens, Nexus failure details, local-activity marker metadata and the values written by
++ * the standard {@code json/plain} converter.
++ *
++ * <p>Streaming needs no object mapper or application context, so the output does not depend on
++ * which application contexts exist in the JVM.
++ */
++public final class StreamingJson {
++  private static final JsonFactory FACTORY = JsonFactory.builder().build();
++
++  private StreamingJson() {}
++
++  /** Runs {@code body} against a generator and returns the UTF-8 JSON it wrote. */
++  public static byte[] write(Consumer<JsonGenerator> body) {
++    ByteArrayOutputStream out = new ByteArrayOutputStream();
++    try (JsonGenerator generator = FACTORY.createGenerator(ObjectWriteContext.empty(), out)) {
++      body.accept(generator);
++    }
++    return out.toByteArray();
++  }
++
++  /** Creates a parser over UTF-8 JSON. The parser is not positioned on a token yet. */
++  public static JsonParser parse(byte[] json) {
++    return FACTORY.createParser(ObjectReadContext.empty(), json);
++  }
++
++  /** Writes {@code value} as a JSON string, or as {@code null} if it is {@code null}. */
++  public static void writeStringOrNull(JsonGenerator generator, @Nullable String value) {
++    if (value == null) {
++      generator.writeNull();
++    } else {
++      generator.writeString(value);
++    }
++  }
++
++  /**
++   * Reads the current token as an {@code int}.
++   *
++   * @throws IllegalArgumentException if the token is not a JSON integer.
++   * @throws tools.jackson.core.JacksonException if the value is out of range for an {@code int}.
++   */
++  public static int readInt(JsonParser parser) {
++    requireInteger(parser);
++    return parser.getIntValue();
++  }
++
++  /**
++   * Reads the current token as a {@code long}.
++   *
++   * @throws IllegalArgumentException if the token is not a JSON integer.
++   * @throws tools.jackson.core.JacksonException if the value is out of range for a {@code long}.
++   */
++  public static long readLong(JsonParser parser) {
++    requireInteger(parser);
++    return parser.getLongValue();
++  }
++
++  private static void requireInteger(JsonParser parser) {
++    if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) {
++      throw new IllegalArgumentException(
++          "Expected a JSON integer but found " + parser.currentToken());
++    }
++  }
++}
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java b/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
-index 03e00f9..b67507b 100644
+index 03e00f9..7c44b02 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/history/LocalActivityMarkerMetadata.java
-@@ -1,7 +1,9 @@
+@@ -1,33 +1,33 @@
  package io.temporal.internal.history;
  
 -import com.fasterxml.jackson.annotation.JsonFormat;
-+import com.fasterxml.jackson.annotation.JsonInclude;
- import com.fasterxml.jackson.annotation.JsonProperty;
-+import io.micronaut.serde.annotation.Serdeable;
-+import io.temporal.common.converter.DurationMillisSerde;
+-import com.fasterxml.jackson.annotation.JsonProperty;
++import io.temporal.internal.common.StreamingJson;
  import java.time.Duration;
  import javax.annotation.Nullable;
++import tools.jackson.core.JsonGenerator;
++import tools.jackson.core.JsonParser;
++import tools.jackson.core.JsonToken;
  
-@@ -9,24 +11,31 @@ import javax.annotation.Nullable;
+ /**
   * See <a
   * href="https://github.com/temporalio/sdk-core/blob/main/protos/local/temporal/sdk/core/external_data/external_data.proto#L12">Core
   * Data Structure</a>
 + *
-+ * <p>Serialized only via the library-private internal Serde mapper, where {@code backoff} ({@link
-+ * Duration}) is written as integer milliseconds for wire-format compatibility (see {@code
-+ * DurationMillisSerde}).
++ * <p>Serialized as {@code {"firstSkd":...,"atpt":...,"backoff":...}} with {@code backoff} ({@link
++ * Duration}) as integer milliseconds, omitted when {@code null}.
   */
-+@Serdeable
-+@JsonInclude(JsonInclude.Include.NON_NULL)
  public class LocalActivityMarkerMetadata {
    // The time the LA was originally scheduled (wall clock time). This is used to track
    // schedule-to-close timeouts when timer-based backoffs are used.
 -  @JsonProperty(value = "firstSkd")
-+  @JsonProperty("firstSkd")
    private long originalScheduledTimestamp;
  
    // The number of attempts at execution before we recorded this result. Typically starts at 1,
    // but it is possible to start at a higher number when backing off using a timer.
 -  @JsonProperty(value = "atpt")
-+  @JsonProperty("atpt")
    private int attempt;
  
    // If set, this local activity conceptually is retrying after the specified backoff.
    // Implementation wise, they are really two different LA machines, but with the same type & input.
    // The retry starts with an attempt number > 1.
-   @Nullable
+-  @Nullable
 -  @JsonFormat(shape = JsonFormat.Shape.NUMBER_INT)
 -  @JsonProperty(value = "backoff")
-+  @JsonProperty("backoff")
-+  @Serdeable.Serializable(using = DurationMillisSerde.class)
-+  @Serdeable.Deserializable(using = DurationMillisSerde.class)
-   private Duration backoff;
+-  private Duration backoff;
++  @Nullable private Duration backoff;
  
    public LocalActivityMarkerMetadata() {}
+ 
+@@ -60,4 +60,55 @@ public class LocalActivityMarkerMetadata {
+   public void setBackoff(@Nullable Duration backoff) {
+     this.backoff = backoff;
+   }
++
++  /** Writes this metadata as a JSON object. */
++  public void writeTo(JsonGenerator generator) {
++    generator.writeStartObject();
++    generator.writeName("firstSkd");
++    generator.writeNumber(originalScheduledTimestamp);
++    generator.writeName("atpt");
++    generator.writeNumber(attempt);
++    if (backoff != null) {
++      generator.writeName("backoff");
++      generator.writeNumber(backoff.toMillis());
++    }
++    generator.writeEndObject();
++  }
++
++  /**
++   * Reads metadata from a JSON object. The parser must be positioned on the object's start token.
++   * Absent fields keep their default values and unknown fields are skipped.
++   *
++   * @throws IllegalArgumentException if the current token does not start an object or a field has
++   *     the wrong JSON type.
++   */
++  public static LocalActivityMarkerMetadata readFrom(JsonParser parser) {
++    if (parser.currentToken() != JsonToken.START_OBJECT) {
++      throw new IllegalArgumentException(
++          "Expected a JSON object for local activity marker metadata but found "
++              + parser.currentToken());
++    }
++    LocalActivityMarkerMetadata metadata = new LocalActivityMarkerMetadata();
++    while (parser.nextToken() == JsonToken.PROPERTY_NAME) {
++      String name = parser.currentName();
++      parser.nextToken();
++      switch (name) {
++        case "firstSkd":
++          metadata.originalScheduledTimestamp = StreamingJson.readLong(parser);
++          break;
++        case "atpt":
++          metadata.attempt = StreamingJson.readInt(parser);
++          break;
++        case "backoff":
++          metadata.backoff =
++              parser.currentToken() == JsonToken.VALUE_NULL
++                  ? null
++                  : Duration.ofMillis(StreamingJson.readLong(parser));
++          break;
++        default:
++          parser.skipChildren();
++      }
++    }
++    return metadata;
++  }
+ }
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
 index 0da2ebf..fd5d398 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/NexusTaskHandlerImpl.java
@@ -1894,61 +2193,66 @@ index 0da2ebf..fd5d398 100644
        } else {
          throw new HandlerException(
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
-index 176168a..da158dc 100644
+index 176168a..5b585f5 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationToken.java
-@@ -1,19 +1,36 @@
+@@ -1,47 +1,31 @@
  package io.temporal.internal.nexus;
  
- import com.fasterxml.jackson.annotation.JsonCreator;
-+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
- import com.fasterxml.jackson.annotation.JsonInclude;
- import com.fasterxml.jackson.annotation.JsonProperty;
+-import com.fasterxml.jackson.annotation.JsonCreator;
+-import com.fasterxml.jackson.annotation.JsonInclude;
+-import com.fasterxml.jackson.annotation.JsonProperty;
 -
 -/** Deserialized representation of a Nexus operation token. */
-+import io.micronaut.serde.annotation.Serdeable;
-+import io.temporal.common.converter.OperationTokenTypeSerde;
-+
 +/**
-+ * Deserialized representation of a Nexus operation token.
-+ *
-+ * <p>{@code ignoreUnknown = false} matches upstream's default Jackson behavior: these are cross-SDK
-+ * wire tokens, so an unrecognized field must fail parsing rather than be silently dropped
-+ * (Micronaut Serde's global default is to ignore unknown properties).
++ * Representation of a Nexus operation token. {@link OperationTokenUtil} reads and writes the JSON
++ * form shared with the other SDKs, whose keys are {@code v}, {@code t}, {@code ns}, {@code wid},
++ * {@code aid}, {@code rid} and {@code uid}.
 + */
-+@Serdeable
-+@JsonIgnoreProperties(ignoreUnknown = false)
  public class OperationToken {
-   @JsonProperty("v")
-   @JsonInclude(JsonInclude.Include.NON_NULL)
+-  @JsonProperty("v")
+-  @JsonInclude(JsonInclude.Include.NON_NULL)
    private final Integer version;
- 
-   @JsonProperty("t")
-+  @Serdeable.Serializable(using = OperationTokenTypeSerde.class)
-+  @Serdeable.Deserializable(using = OperationTokenTypeSerde.class)
+-
+-  @JsonProperty("t")
    private final OperationTokenType type;
- 
-+  // Micronaut Serde's global default inclusion is NON_EMPTY (not upstream Jackson's implicit
-+  // ALWAYS), so an unannotated field silently drops null/empty values. ALWAYS restores upstream's
-+  // behavior of emitting an explicit "ns":null rather than omitting the property.
-   @JsonProperty("ns")
-+  @JsonInclude(JsonInclude.Include.ALWAYS)
+-
+-  @JsonProperty("ns")
    private final String namespace;
+-
+-  @JsonProperty("wid")
+-  @JsonInclude(JsonInclude.Include.NON_NULL)
+   private final String workflowId;
+-
+-  @JsonProperty("aid")
+-  @JsonInclude(JsonInclude.Include.NON_NULL)
+   private final String activityId;
+-
+-  @JsonProperty("rid")
+-  @JsonInclude(JsonInclude.Include.NON_NULL)
+   private final String runId;
+-
+-  @JsonProperty("uid")
+-  @JsonInclude(JsonInclude.Include.NON_NULL)
+   private final String updateId;
  
-   @JsonProperty("wid")
-@@ -34,14 +51,17 @@ public class OperationToken {
- 
-   @JsonCreator
+-  @JsonCreator
    public OperationToken(
 -      @JsonProperty("t") Integer type,
-+      @JsonProperty("t") OperationTokenType type,
-       @JsonProperty("ns") String namespace,
-       @JsonProperty("wid") String workflowId,
-       @JsonProperty("aid") String activityId,
-       @JsonProperty("rid") String runId,
-       @JsonProperty("uid") String updateId,
-       @JsonProperty("v") Integer version) {
+-      @JsonProperty("ns") String namespace,
+-      @JsonProperty("wid") String workflowId,
+-      @JsonProperty("aid") String activityId,
+-      @JsonProperty("rid") String runId,
+-      @JsonProperty("uid") String updateId,
+-      @JsonProperty("v") Integer version) {
 -    this.type = OperationTokenType.fromValue(type);
++      OperationTokenType type,
++      String namespace,
++      String workflowId,
++      String activityId,
++      String runId,
++      String updateId,
++      Integer version) {
 +    // A missing or explicit-null "t" must normalize to UNKNOWN, matching upstream's
 +    // OperationTokenType.fromValue(null) behavior, so getType() is never null and callers'
 +    // switch/equals checks on the type reliably throw IllegalArgumentException instead of NPE.
@@ -1956,7 +2260,7 @@ index 176168a..da158dc 100644
      this.namespace = namespace;
      this.workflowId = workflowId;
      this.activityId = activityId;
-@@ -108,10 +128,6 @@ public class OperationToken {
+@@ -108,10 +92,6 @@ public class OperationToken {
      return workflowId;
    }
  
@@ -1967,15 +2271,11 @@ index 176168a..da158dc 100644
    public String getActivityId() {
      return activityId;
    }
-@@ -125,4 +141,12 @@ public class OperationToken {
+@@ -125,4 +105,8 @@ public class OperationToken {
    public String getRunId() {
      return runId;
    }
 +
-+  // Micronaut Serde orders serialized properties by getter declaration order, not field
-+  // declaration order or @JsonCreator parameter order. getUpdateId() must stay declared after
-+  // getRunId() so workflow-update tokens serialize as {"t":...,"ns":...,"wid":...,"rid":...,
-+  // "uid":...} byte-identically with upstream's field-order-driven Jackson output.
 +  public String getUpdateId() {
 +    return updateId;
 +  }
@@ -2007,10 +2307,10 @@ index a7afe11..ea252b5 100644
      if (value == null) {
        return UNKNOWN;
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
-index a97d75c..64fbb07 100644
+index a97d75c..3fbee38 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/nexus/OperationTokenUtil.java
-@@ -1,16 +1,12 @@
+@@ -1,16 +1,17 @@
  package io.temporal.internal.nexus;
  
 -import com.fasterxml.jackson.core.JsonProcessingException;
@@ -2019,10 +2319,15 @@ index a97d75c..64fbb07 100644
 -import com.fasterxml.jackson.databind.ObjectWriter;
 -import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
  import com.google.common.base.Strings;
-+import io.micronaut.core.type.Argument;
-+import io.temporal.common.converter.InternalSerdeMapper;
++import io.temporal.internal.common.StreamingJson;
 +import java.io.IOException;
++import java.math.BigInteger;
  import java.util.Base64;
++import java.util.HashSet;
++import java.util.Set;
++import tools.jackson.core.JsonGenerator;
++import tools.jackson.core.JsonParser;
++import tools.jackson.core.JsonToken;
  
  public class OperationTokenUtil {
 -  private static final ObjectMapper mapper = new ObjectMapper().registerModule(new Jdk8Module());
@@ -2030,19 +2335,17 @@ index a97d75c..64fbb07 100644
    private static final Base64.Decoder decoder = Base64.getUrlDecoder();
    private static final Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
  
-@@ -23,8 +19,9 @@ public class OperationTokenUtil {
+@@ -23,8 +24,7 @@ public class OperationTokenUtil {
    public static OperationToken loadOperationToken(String operationToken) {
      OperationToken token;
      try {
 -      JavaType reference = mapper.getTypeFactory().constructType(OperationToken.class);
 -      token = mapper.readValue(decoder.decode(operationToken), reference);
-+      token =
-+          InternalSerdeMapper.get()
-+              .readValue(decoder.decode(operationToken), Argument.of(OperationToken.class));
++      token = parse(decoder.decode(operationToken));
      } catch (Exception e) {
        throw new IllegalArgumentException("Failed to parse operation token: " + e.getMessage());
      }
-@@ -61,7 +58,7 @@ public class OperationTokenUtil {
+@@ -61,7 +61,7 @@ public class OperationTokenUtil {
     */
    public static OperationToken loadWorkflowRunOperationToken(String operationToken) {
      OperationToken token = loadOperationToken(operationToken);
@@ -2051,7 +2354,7 @@ index a97d75c..64fbb07 100644
        throw new IllegalArgumentException(
            "Invalid workflow run token: incorrect operation token type: " + token.getType());
      }
-@@ -123,17 +120,17 @@ public class OperationTokenUtil {
+@@ -123,17 +123,15 @@ public class OperationTokenUtil {
  
    /** Generate a workflow run operation token from a workflow ID and namespace. */
    public static String generateWorkflowRunOperationToken(String workflowId, String namespace)
@@ -2062,9 +2365,7 @@ index a97d75c..64fbb07 100644
 -    return encoder.encodeToString(json.getBytes());
 +      throws IOException {
 +    byte[] json =
-+        InternalSerdeMapper.get()
-+            .writeValueAsBytes(
-+                new OperationToken(OperationTokenType.WORKFLOW_RUN, namespace, workflowId));
++        toJson(new OperationToken(OperationTokenType.WORKFLOW_RUN, namespace, workflowId));
 +    return encoder.encodeToString(json);
    }
  
@@ -2076,20 +2377,18 @@ index a97d75c..64fbb07 100644
      if (Strings.isNullOrEmpty(namespace)) {
        throw new IllegalArgumentException("Invalid workflow update token: missing namespace(ns)");
      }
-@@ -145,8 +142,10 @@ public class OperationTokenUtil {
+@@ -145,8 +143,8 @@ public class OperationTokenUtil {
        throw new IllegalArgumentException("Invalid workflow update token: missing update ID (uid)");
      }
      runId = Strings.emptyToNull(runId); // empty runId is allowed but should not be serialized
 -    String json = ow.writeValueAsString(new OperationToken(namespace, workflowId, runId, updateId));
 -    return encoder.encodeToString(json.getBytes());
-+    byte[] json =
-+        InternalSerdeMapper.get()
-+            .writeValueAsBytes(new OperationToken(namespace, workflowId, runId, updateId));
++    byte[] json = toJson(new OperationToken(namespace, workflowId, runId, updateId));
 +    return encoder.encodeToString(json);
    }
  
    /**
-@@ -157,7 +156,7 @@ public class OperationTokenUtil {
+@@ -157,7 +155,7 @@ public class OperationTokenUtil {
     * yet known.
     */
    public static String generateActivityExecutionOperationToken(String activityId, String namespace)
@@ -2098,23 +2397,164 @@ index a97d75c..64fbb07 100644
      return generateActivityExecutionOperationToken(activityId, null, namespace);
    }
  
-@@ -171,12 +170,13 @@ public class OperationTokenUtil {
+@@ -171,12 +169,156 @@ public class OperationTokenUtil {
     * #generateActivityExecutionOperationToken(String, String)} for that path.
     */
    public static String generateActivityExecutionOperationToken(
 -      String activityId, String runId, String namespace) throws JsonProcessingException {
 -    String json =
 -        ow.writeValueAsString(
--            new OperationToken(
--                OperationTokenType.ACTIVITY_EXECUTION, namespace, null, activityId, runId));
--    return encoder.encodeToString(json.getBytes());
 +      String activityId, String runId, String namespace) throws IOException {
 +    byte[] json =
-+        InternalSerdeMapper.get()
-+            .writeValueAsBytes(
-+                new OperationToken(
-+                    OperationTokenType.ACTIVITY_EXECUTION, namespace, null, activityId, runId));
++        toJson(
+             new OperationToken(
+                 OperationTokenType.ACTIVITY_EXECUTION, namespace, null, activityId, runId));
+-    return encoder.encodeToString(json.getBytes());
 +    return encoder.encodeToString(json);
++  }
++
++  /** Writes {@code ns} even when {@code null}; every other key is omitted when {@code null}. */
++  private static byte[] toJson(OperationToken token) {
++    return StreamingJson.write(
++        generator -> {
++          generator.writeStartObject();
++          if (token.getVersion() != null) {
++            generator.writeName("v");
++            generator.writeNumber(token.getVersion());
++          }
++          generator.writeName("t");
++          generator.writeNumber(token.getType().toValue());
++          generator.writeName("ns");
++          StreamingJson.writeStringOrNull(generator, token.getNamespace());
++          writeStringIfPresent(generator, "wid", token.getWorkflowId());
++          writeStringIfPresent(generator, "aid", token.getActivityId());
++          writeStringIfPresent(generator, "rid", token.getRunId());
++          writeStringIfPresent(generator, "uid", token.getUpdateId());
++          generator.writeEndObject();
++        });
++  }
++
++  private static void writeStringIfPresent(JsonGenerator generator, String name, String value) {
++    if (value != null) {
++      generator.writeName(name);
++      generator.writeString(value);
++    }
++  }
++
++  /**
++   * Parses the JSON form of a token. These are cross-SDK wire tokens, so a key other than the ones
++   * {@link OperationToken} has, or a repeated key, fails parsing instead of being dropped.
++   *
++   * @throws IllegalArgumentException if {@code json} is not a JSON object or a value has an
++   *     unusable type.
++   * @throws tools.jackson.core.JacksonException if {@code json} is malformed.
++   */
++  static OperationToken parse(byte[] json) {
++    try (JsonParser parser = StreamingJson.parse(json)) {
++      if (parser.nextToken() != JsonToken.START_OBJECT) {
++        throw new IllegalArgumentException(
++            "Expected a JSON object but found " + parser.currentToken());
++      }
++      Integer type = null;
++      Integer version = null;
++      String namespace = null;
++      String workflowId = null;
++      String activityId = null;
++      String runId = null;
++      String updateId = null;
++      Set<String> seen = new HashSet<>();
++      while (parser.nextToken() == JsonToken.PROPERTY_NAME) {
++        String name = parser.currentName();
++        if (!seen.add(name)) {
++          throw new IllegalArgumentException("Duplicate property: " + name);
++        }
++        parser.nextToken();
++        switch (name) {
++          case "t":
++            type = readInteger(parser);
++            break;
++          case "v":
++            version = readInteger(parser);
++            break;
++          case "ns":
++            namespace = readString(parser);
++            break;
++          case "wid":
++            workflowId = readString(parser);
++            break;
++          case "aid":
++            activityId = readString(parser);
++            break;
++          case "rid":
++            runId = readString(parser);
++            break;
++          case "uid":
++            updateId = readString(parser);
++            break;
++          default:
++            throw new IllegalArgumentException("Unrecognized property: " + name);
++        }
++      }
++      return new OperationToken(
++          OperationTokenType.fromValue(type),
++          namespace,
++          workflowId,
++          activityId,
++          runId,
++          updateId,
++          version);
++    }
++  }
++
++  /**
++   * Reads an {@link Integer} with the coercions of the Jackson-based parser this replaced, so
++   * tokens from other SDKs keep parsing the same way. A floating-point number is truncated toward
++   * zero and a numeric string is parsed. A boolean, a container or an integer outside the {@code
++   * int} range is rejected.
++   */
++  private static Integer readInteger(JsonParser parser) {
++    switch (parser.currentToken()) {
++      case VALUE_NULL:
++        return null;
++      case VALUE_NUMBER_INT:
++        BigInteger integral = parser.getBigIntegerValue();
++        if (integral.bitLength() > Integer.SIZE - 1) {
++          throw new IllegalArgumentException(
++              "Numeric value (" + integral + ") out of range of int");
++        }
++        return integral.intValue();
++      case VALUE_NUMBER_FLOAT:
++        return (int) parser.getDoubleValue();
++      case VALUE_STRING:
++        try {
++          return Integer.parseInt(parser.getString().trim());
++        } catch (NumberFormatException e) {
++          throw new IllegalArgumentException(
++              "Cannot deserialize value of type Integer from String \""
++                  + parser.getString()
++                  + "\": not a valid Integer value");
++        }
++      default:
++        throw new IllegalArgumentException(
++            "Cannot deserialize value of type Integer from " + parser.currentToken());
++    }
++  }
++
++  /** Reads a {@link String}, taking the text of a number or boolean as Jackson does. */
++  private static String readString(JsonParser parser) {
++    switch (parser.currentToken()) {
++      case VALUE_NULL:
++        return null;
++      case VALUE_STRING:
++      case VALUE_NUMBER_INT:
++      case VALUE_NUMBER_FLOAT:
++      case VALUE_TRUE:
++      case VALUE_FALSE:
++        return parser.getString();
++      default:
++        throw new IllegalArgumentException(
++            "Cannot deserialize value of type String from " + parser.currentToken());
++    }
    }
  
    private OperationTokenUtil() {}
@@ -2358,59 +2798,8 @@ index 46820e6..0000000
 -    }
 -  }
 -}
-diff --git a/temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java b/temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java
-new file mode 100644
-index 0000000..2fca2f0
---- /dev/null
-+++ b/temporal-sdk/src/serdeTestAgent/java/io/temporal/testagent/SerdeTestAgent.java
-@@ -0,0 +1,45 @@
-+package io.temporal.testagent;
-+
-+import java.lang.instrument.Instrumentation;
-+import java.lang.reflect.Method;
-+import java.util.Map;
-+
-+/**
-+ * Javaagent that installs {@code io.temporal.common.converter.InternalSerdeMapper} eagerly, in
-+ * {@code premain}, before any test code runs. Eager installation is required because a lazy
-+ * fallback runs on whichever thread happens to be first, and that thread is sometimes the
-+ * time-skipping virtual clock's {@code "Timer task"} thread, which then stalls.
-+ *
-+ * <p>Resolves the SDK's classes by name via reflection, so this agent has no compile- or run-time
-+ * dependency on the SDK. A JVM whose classpath has no {@code temporal-sdk} (e.g.
-+ * temporal-workflowcheck's tests) leaves {@link #premain} a no-op.
-+ *
-+ * <p>Not part of the published SDK; wired only onto the fork's own test JVMs by {@code
-+ * gradle/java.gradle}.
-+ */
-+public final class SerdeTestAgent {
-+  private SerdeTestAgent() {}
-+
-+  public static void premain(String agentArgs, Instrumentation instrumentation) {
-+    ClassLoader loader = ClassLoader.getSystemClassLoader();
-+    Class<?> objectMapperClass;
-+    Class<?> internalSerdeMapperClass;
-+    try {
-+      objectMapperClass = Class.forName("io.micronaut.serde.ObjectMapper", false, loader);
-+      internalSerdeMapperClass =
-+          Class.forName("io.temporal.common.converter.InternalSerdeMapper", false, loader);
-+    } catch (ClassNotFoundException e) {
-+      return;
-+    }
-+    try {
-+      Method createMethod = objectMapperClass.getMethod("create", Map.class, String[].class);
-+      Object mapper =
-+          createMethod.invoke(
-+              null, Map.of(), (Object) new String[] {"io.temporal.common.converter"});
-+      Method installMethod = internalSerdeMapperClass.getMethod("install", objectMapperClass);
-+      installMethod.invoke(null, mapper);
-+    } catch (ReflectiveOperationException e) {
-+      throw new IllegalStateException("Failed to install InternalSerdeMapper", e);
-+    }
-+  }
-+}
 diff --git a/temporal-sdk/src/test/java/io/temporal/activity/ActivityHeartbeatThrottlingTest.java b/temporal-sdk/src/test/java/io/temporal/activity/ActivityHeartbeatThrottlingTest.java
-index 1ab5791..77a0dda 100644
+index 1ab5791..1aa0e37 100644
 --- a/temporal-sdk/src/test/java/io/temporal/activity/ActivityHeartbeatThrottlingTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/activity/ActivityHeartbeatThrottlingTest.java
 @@ -7,7 +7,7 @@ import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest;
@@ -2418,19 +2807,26 @@ index 1ab5791..77a0dda 100644
  import io.temporal.client.ActivityWorkerShutdownException;
  import io.temporal.client.WorkflowClient;
 -import io.temporal.common.converter.JacksonJsonPayloadConverter;
-+import io.temporal.common.converter.MicronautSerdePayloadConverter;
++import io.temporal.common.converter.DefaultDataConverter;
  import io.temporal.internal.Signal;
  import io.temporal.testing.internal.SDKTestOptions;
  import io.temporal.testing.internal.SDKTestWorkflowRule;
-@@ -53,7 +53,7 @@ public class ActivityHeartbeatThrottlingTest {
+@@ -53,11 +53,10 @@ public class ActivityHeartbeatThrottlingTest {
                      .build());
  
      String payload =
 -        new JacksonJsonPayloadConverter()
-+        new MicronautSerdePayloadConverter()
-             .fromData(
-                 describeResponse.getPendingActivities(0).getHeartbeatDetails().getPayloads(0),
-                 String.class,
+-            .fromData(
+-                describeResponse.getPendingActivities(0).getHeartbeatDetails().getPayloads(0),
+-                String.class,
+-                String.class);
++        DefaultDataConverter.STANDARD_INSTANCE.fromPayload(
++            describeResponse.getPendingActivities(0).getHeartbeatDetails().getPayloads(0),
++            String.class,
++            String.class);
+     assertEquals(
+         "Only the first heartbeat should've get through, others should be throttled", "1", payload);
+   }
 diff --git a/temporal-sdk/src/test/java/io/temporal/activity/ActivityInfoTest.java b/temporal-sdk/src/test/java/io/temporal/activity/ActivityInfoTest.java
 index ab2f878..0362885 100644
 --- a/temporal-sdk/src/test/java/io/temporal/activity/ActivityInfoTest.java
@@ -2785,63 +3181,21 @@ index ab2f878..0362885 100644
          }
        }
        return serialized;
-diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java
-new file mode 100644
-index 0000000..36cac92
---- /dev/null
-+++ b/temporal-sdk/src/test/java/io/temporal/common/converter/DurationMillisTest.java
-@@ -0,0 +1,51 @@
-+package io.temporal.common.converter;
-+
-+import io.micronaut.serde.ObjectMapper;
-+import io.micronaut.serde.annotation.Serdeable;
-+import io.temporal.internal.history.LocalActivityMarkerMetadata;
-+import java.time.Duration;
-+import org.junit.Assert;
-+import org.junit.Test;
-+
-+public class DurationMillisTest {
-+
-+  @Serdeable
-+  public static class DurationCarrier {
-+    private Duration backoff;
-+
-+    public Duration getBackoff() {
-+      return backoff;
-+    }
-+
-+    public void setBackoff(Duration backoff) {
-+      this.backoff = backoff;
-+    }
-+  }
-+
-+  @Test
-+  public void internalDurationSerializesAsIntegerMillis() throws Exception {
-+    LocalActivityMarkerMetadata metadata = new LocalActivityMarkerMetadata(1, 0L);
-+    metadata.setBackoff(Duration.ofSeconds(2));
-+
-+    String json = new String(InternalSerdeMapper.get().writeValueAsBytes(metadata));
-+    Assert.assertTrue(
-+        "expected integer millis backoff in " + json,
-+        json.contains("\"backoff\":2000,") || json.contains("\"backoff\":2000}"));
-+  }
-+
-+  @Test
-+  public void appMapperDoesNotInheritMillisFormat() throws Exception {
-+    DurationCarrier carrier = new DurationCarrier();
-+    carrier.setBackoff(Duration.ofSeconds(2));
-+
-+    String json = new String(ObjectMapper.getDefault().writeValueAsBytes(carrier));
-+    // The default app-style mapper must NOT produce the internal millis format (2000).
-+    // Serde's default Duration format is integer nanoseconds.
-+    Assert.assertFalse(
-+        "default mapper must not emit millis (2000) for Duration: " + json,
-+        json.contains("\"backoff\":2000,") || json.contains("\"backoff\":2000}"));
-+    Assert.assertTrue(
-+        "default mapper should emit nanos (2000000000) for Duration: " + json,
-+        json.contains("\"backoff\":2000000000"));
-+  }
-+}
+diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java
+index f3957ad..adaf392 100644
+--- a/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java
+@@ -32,9 +32,7 @@ public class CodecDataConverterTest {
+     PrefixPayloadCodec prefixPayloadCodec = new PrefixPayloadCodec();
+     this.dataConverter =
+         new CodecDataConverter(
+-            DefaultDataConverter.newDefaultInstance(),
+-            Collections.singletonList(prefixPayloadCodec),
+-            true);
++            GlobalDataConverter.get(), Collections.singletonList(prefixPayloadCodec), true);
+   }
+ 
+   @Test
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/EncodedValuesTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/EncodedValuesTest.java
 index 0095787..104560e 100644
 --- a/temporal-sdk/src/test/java/io/temporal/common/converter/EncodedValuesTest.java
@@ -2871,40 +3225,6 @@ index 0095787..104560e 100644
      Optional<Payloads> payloads = v.toPayloads();
      assertFalse(payloads.isPresent());
    }
-diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java
-new file mode 100644
-index 0000000..c1e58d1
---- /dev/null
-+++ b/temporal-sdk/src/test/java/io/temporal/common/converter/InternalSerdeMapperTest.java
-@@ -0,0 +1,28 @@
-+package io.temporal.common.converter;
-+
-+import io.micronaut.serde.ObjectMapper;
-+import org.junit.Assert;
-+import org.junit.Test;
-+
-+/**
-+ * Every test JVM in this fork installs a mapper via the {@code serdeTestAgent} javaagent before any
-+ * test runs, so this test clears it to observe {@link InternalSerdeMapper#get()}'s fail-fast path,
-+ * then restores it for the rest of the JVM's tests.
-+ */
-+public class InternalSerdeMapperTest {
-+
-+  @Test
-+  public void getThrowsIllegalStateExceptionWhenNothingInstalled() {
-+    ObjectMapper installed = InternalSerdeMapper.get();
-+    try {
-+      InternalSerdeMapper.clear();
-+      IllegalStateException e =
-+          Assert.assertThrows(IllegalStateException.class, InternalSerdeMapper::get);
-+      Assert.assertTrue(
-+          "message should name the install method: " + e.getMessage(),
-+          e.getMessage().contains("InternalSerdeMapper.install"));
-+    } finally {
-+      InternalSerdeMapper.install(installed);
-+    }
-+  }
-+}
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java
 deleted file mode 100644
 index 5154bdc..0000000
@@ -3070,7 +3390,7 @@ index 5154bdc..0000000
 -  }
 -}
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/JsonDataConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/JsonDataConverterTest.java
-index 1f1d18d..fc2f0b7 100644
+index 1f1d18d..0a192a4 100644
 --- a/temporal-sdk/src/test/java/io/temporal/common/converter/JsonDataConverterTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/common/converter/JsonDataConverterTest.java
 @@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
@@ -3081,6 +3401,15 @@ index 1f1d18d..fc2f0b7 100644
  import io.temporal.api.common.v1.Payloads;
  import java.lang.reflect.Method;
  import java.lang.reflect.Type;
+@@ -16,7 +17,7 @@ import org.junit.Test;
+ 
+ public class JsonDataConverterTest {
+ 
+-  private final DataConverter converter = DefaultDataConverter.STANDARD_INSTANCE;
++  private final DataConverter converter = GlobalDataConverter.get();
+ 
+   public static void foo(List<UUID> arg) {}
+ 
 @@ -47,13 +48,17 @@ public class JsonDataConverterTest {
      assertEquals(result.toString(), dateTime.toInstant(), result.toInstant());
    }
@@ -3102,10 +3431,10 @@ index 1f1d18d..fc2f0b7 100644
      }
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java
 new file mode 100644
-index 0000000..6ab5883
+index 0000000..2fa92bd
 --- /dev/null
 +++ b/temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,79 @@
 +package io.temporal.common.converter;
 +
 +import com.google.protobuf.ByteString;
@@ -3176,13 +3505,6 @@ index 0000000..6ab5883
 +    Assert.assertEquals(original, converter.fromData(p, TestChunk.class, TestChunk.class));
 +  }
 +
-+  @Test
-+  public void no_arg_constructor_uses_fallback_mapper() {
-+    MicronautSerdePayloadConverter c = new MicronautSerdePayloadConverter();
-+    Payload p = c.toData(new TestChunk("c1", true, 1)).get();
-+    Assert.assertEquals("c1", c.fromData(p, TestChunk.class, TestChunk.class).chunkId());
-+  }
-+
 +  private static Payload jsonPayload(String json) {
 +    return Payload.newBuilder()
 +        .putMetadata(
@@ -3192,84 +3514,442 @@ index 0000000..6ab5883
 +        .build();
 +  }
 +}
-diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java
+diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonGoldenTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonGoldenTest.java
 new file mode 100644
-index 0000000..8574bc1
+index 0000000..f265ea7
 --- /dev/null
-+++ b/temporal-sdk/src/test/java/io/temporal/common/converter/SerdeIsolationTest.java
-@@ -0,0 +1,74 @@
++++ b/temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonGoldenTest.java
+@@ -0,0 +1,265 @@
 +package io.temporal.common.converter;
 +
-+import io.micronaut.context.ApplicationContext;
-+import io.micronaut.serde.ObjectMapper;
-+import io.micronaut.serde.annotation.Serdeable;
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import com.google.common.reflect.TypeToken;
++import com.google.protobuf.ByteString;
++import io.temporal.api.common.v1.Payload;
++import io.temporal.internal.history.LocalActivityMarkerMetadata;
++import java.lang.reflect.Type;
 +import java.time.Duration;
-+import org.junit.Assert;
++import java.time.OffsetDateTime;
++import java.time.ZoneOffset;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.LinkedHashMap;
++import java.util.LinkedHashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.TreeSet;
 +import org.junit.Test;
 +
 +/**
-+ * Load-bearing isolation test: the SDK ships {@code @Singleton Serde} beans (e.g. {@link
-+ * DurationMillisSerde}) so the library-private {@link InternalSerdeMapper} can use the internal
-+ * millis format. A consuming Micronaut application also has the SDK jar on its classpath and
-+ * obtains its own {@link ObjectMapper} from its {@link ApplicationContext}. This test proves the
-+ * SDK's internal serdes do NOT leak into that application-scoped mapper: a plain {@link Duration}
-+ * must serialize with Serde's DEFAULT format (integer nanos), never the SDK-internal millis format.
++ * Pins the exact bytes the standard {@code json/plain} converter writes for the SDK's fixed set of
++ * protocol types. These payloads are persisted in workflow history markers and search attributes,
++ * so any change in output breaks replay of existing histories.
 + */
-+public class SerdeIsolationTest {
++public class StandardJsonGoldenTest {
++  private static final DataConverter CONVERTER = DefaultDataConverter.STANDARD_INSTANCE;
 +
-+  @Serdeable
-+  public static class DurationCarrier {
-+    private Duration backoff;
++  private static final OffsetDateTime MILLIS_WITH_OFFSET =
++      OffsetDateTime.of(2026, 10, 15, 12, 34, 56, 789_000_000, ZoneOffset.ofHours(-4));
 +
-+    public Duration getBackoff() {
-+      return backoff;
-+    }
++  private static void assertEncodes(String expectedJson, Object value) {
++    Payload payload = CONVERTER.toPayload(value).get();
++    assertEquals(
++        Collections.singletonMap(
++            EncodingKeys.METADATA_ENCODING_KEY, ByteString.copyFromUtf8("json/plain")),
++        payload.getMetadataMap());
++    assertEquals(expectedJson, payload.getData().toStringUtf8());
++  }
 +
-+    public void setBackoff(Duration backoff) {
-+      this.backoff = backoff;
++  private static Payload jsonPayload(String json) {
++    return Payload.newBuilder()
++        .putMetadata(EncodingKeys.METADATA_ENCODING_KEY, ByteString.copyFromUtf8("json/plain"))
++        .setData(ByteString.copyFromUtf8(json))
++        .build();
++  }
++
++  private static <T> T decode(String json, Class<T> valueClass, Type valueType) {
++    return CONVERTER.fromPayload(jsonPayload(json), valueClass, valueType);
++  }
++
++  private static <T> T decode(String json, Class<T> valueClass) {
++    return decode(json, valueClass, valueClass);
++  }
++
++  @Test
++  public void nullEncodesAsBinaryNull() {
++    Payload payload = CONVERTER.toPayload(null).get();
++    assertEquals(
++        ByteString.copyFromUtf8("binary/null"),
++        payload.getMetadataMap().get(EncodingKeys.METADATA_ENCODING_KEY));
++    assertTrue(payload.getData().isEmpty());
++  }
++
++  @Test
++  public void strings() {
++    assertEncodes("\"hello\"", "hello");
++    assertEncodes("\"\"", "");
++    String tricky =
++        "q\"b\\s/ \n\r\t\b\f \u0001\u001f \u007f \u00e9 \u2028 \u2029 \ud83d\ude00 \u0000";
++    String trickyJson =
++        "\"q\\\"b\\\\s/ \\n\\r\\t\\b\\f \\u0001\\u001F \u007f \u00e9 \u2028 \u2029 \ud83d\ude00 \\u0000\"";
++    assertEncodes(trickyJson, tricky);
++    assertEquals(tricky, decode(trickyJson, String.class));
++    assertEquals("hello", decode("\"hello\"", String.class));
++    assertEquals("", decode("\"\"", String.class));
++    assertEquals("\u00e9\ud83d\ude00", decode("\"\\u00e9\\ud83d\\ude00\"", String.class));
++  }
++
++  @Test
++  public void integralNumbers() {
++    assertEncodes("-42", -42);
++    assertEncodes("2147483647", Integer.MAX_VALUE);
++    assertEncodes("-9223372036854775808", Long.MIN_VALUE);
++    assertEncodes("7", 7L);
++    assertEncodes("12", (short) 12);
++    assertEncodes("-3", (byte) -3);
++    assertEquals(Integer.valueOf(-42), decode("-42", Integer.class));
++    assertEquals(Integer.valueOf(2147483647), decode("2147483647", Integer.class));
++    assertEquals(Long.valueOf(Long.MIN_VALUE), decode("-9223372036854775808", Long.class));
++    assertEquals(Long.valueOf(7), decode("7", Long.class));
++    assertEquals(Integer.valueOf(7), decode("7", int.class));
++    assertEquals(Long.valueOf(7), decode("7", long.class));
++  }
++
++  @Test
++  public void floatingPointNumbers() {
++    assertEncodes("1.5", 1.5d);
++    assertEncodes("1.0", 1.0d);
++    assertEncodes("1.0E21", 1e21d);
++    assertEncodes("1.0E-7", 1e-7d);
++    assertEncodes("0.1", 0.1d);
++    assertEncodes("-0.0", -0.0d);
++    assertEncodes("\"NaN\"", Double.NaN);
++    assertEncodes("\"Infinity\"", Double.POSITIVE_INFINITY);
++    assertEncodes("1.5", 1.5f);
++    assertEncodes("0.1", 0.1f);
++    assertEncodes("1.0E10", 1e10f);
++    assertEquals(Double.valueOf(1.5), decode("1.5", Double.class));
++    assertEquals(Double.valueOf(1.0), decode("1.0", Double.class));
++    assertEquals(Double.valueOf(1e21), decode("1.0E21", Double.class));
++    assertEquals(Double.valueOf(7), decode("7", Double.class));
++    assertEquals(Double.valueOf(0.1), decode("0.1", double.class));
++  }
++
++  @Test
++  public void booleans() {
++    assertEncodes("true", true);
++    assertEncodes("false", false);
++    assertEquals(Boolean.TRUE, decode("true", Boolean.class));
++    assertEquals(Boolean.FALSE, decode("false", boolean.class));
++  }
++
++  @Test
++  public void offsetDateTimes() {
++    assertEncodes("\"2026-10-15T12:34:56.789-04:00\"", MILLIS_WITH_OFFSET);
++    assertEncodes(
++        "\"2026-10-15T12:34:00Z\"", OffsetDateTime.of(2026, 10, 15, 12, 34, 0, 0, ZoneOffset.UTC));
++    assertEncodes(
++        "\"2026-10-15T12:34:56Z\"", OffsetDateTime.of(2026, 10, 15, 12, 34, 56, 0, ZoneOffset.UTC));
++    assertEncodes(
++        "\"2026-10-15T12:34:56.123456789+05:30\"",
++        OffsetDateTime.of(2026, 10, 15, 12, 34, 56, 123456789, ZoneOffset.ofHoursMinutes(5, 30)));
++    assertEncodes(
++        "\"2026-10-15T12:34:56.1+01:02:03\"",
++        OffsetDateTime.of(
++            2026, 10, 15, 12, 34, 56, 100_000_000, ZoneOffset.ofHoursMinutesSeconds(1, 2, 3)));
++    assertEncodes(
++        "\"-0005-01-01T00:00:00Z\"", OffsetDateTime.of(-5, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
++    assertEncodes(
++        "\"+12345-01-01T00:00:00Z\"", OffsetDateTime.of(12345, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
++
++    assertEquals(
++        MILLIS_WITH_OFFSET, decode("\"2026-10-15T12:34:56.789-04:00\"", OffsetDateTime.class));
++    assertEquals(
++        OffsetDateTime.of(2026, 10, 15, 12, 34, 0, 0, ZoneOffset.UTC),
++        decode("\"2026-10-15T12:34:00Z\"", OffsetDateTime.class));
++    assertEquals(
++        OffsetDateTime.of(2026, 10, 15, 12, 34, 56, 123456789, ZoneOffset.ofHoursMinutes(5, 30)),
++        decode("\"2026-10-15T12:34:56.123456789+05:30\"", OffsetDateTime.class));
++    assertEquals(
++        OffsetDateTime.of(2026, 10, 15, 12, 34, 56, 0, ZoneOffset.UTC),
++        decode("\"2026-10-15T12:34:56.000000000Z\"", OffsetDateTime.class));
++  }
++
++  @Test
++  public void collectionsAndArrays() {
++    assertEncodes("[\"a\",\"b\"]", Arrays.asList("a", "b"));
++    assertEncodes("[]", new ArrayList<String>());
++    assertEncodes("[\"only\"]", Collections.singletonList("only"));
++    assertEncodes("[1,2,3,4]", Arrays.asList(1, 2L, (short) 3, (byte) 4));
++    assertEncodes("[1.5,2.0]", Arrays.asList(1.5d, 2.0f));
++    assertEncodes("[true,false]", Arrays.asList(true, false));
++    assertEncodes("[\"x\",null]", Arrays.asList("x", null));
++    assertEncodes("[\"s1\",\"s2\"]", new LinkedHashSet<>(Arrays.asList("s1", "s2")));
++    assertEncodes("[1,3]", new TreeSet<>(Arrays.asList(3L, 1L)));
++    assertEncodes("[\"a\",1,true]", new Object[] {"a", 1, true});
++    assertEncodes("[]", new String[] {});
++    assertEncodes("[\"p\",\"q\"]", new String[] {"p", "q"});
++    assertEncodes("[1,2]", new Integer[] {1, 2});
++    assertEncodes(
++        "[[\"n1\",\"n2\"],[1,2]]", Arrays.asList(Arrays.asList("n1", "n2"), Arrays.asList(1, 2)));
++    assertEncodes("[\"2026-10-15T12:34:56.789-04:00\"]", Arrays.asList(MILLIS_WITH_OFFSET));
++  }
++
++  @Test
++  public void typedListsDecode() {
++    assertEquals(
++        Arrays.asList("a", "b"),
++        decode("[\"a\",\"b\"]", List.class, new TypeToken<List<String>>() {}.getType()));
++    assertEquals(
++        Arrays.asList(1L, 2L),
++        decode("[1,2]", List.class, new TypeToken<List<Long>>() {}.getType()));
++    assertEquals(
++        Arrays.asList(1, 2),
++        decode("[1,2]", List.class, new TypeToken<List<Integer>>() {}.getType()));
++    assertEquals(
++        Arrays.asList(1.5d, 2.0d),
++        decode("[1.5,2.0]", List.class, new TypeToken<List<Double>>() {}.getType()));
++    assertEquals(
++        Arrays.asList(true, false),
++        decode("[true,false]", List.class, new TypeToken<List<Boolean>>() {}.getType()));
++    assertEquals(
++        Arrays.asList(MILLIS_WITH_OFFSET),
++        decode(
++            "[\"2026-10-15T12:34:56.789-04:00\"]",
++            List.class,
++            new TypeToken<List<OffsetDateTime>>() {}.getType()));
++    assertEquals(
++        new ArrayList<String>(),
++        decode("[]", List.class, new TypeToken<List<String>>() {}.getType()));
++  }
++
++  @Test
++  public void rawListDecodesAsListOfObject() {
++    assertEquals(new ArrayList<>(), decode("[]", List.class));
++    assertEquals(
++        Arrays.asList(1, "a", true, null, 1.5d, 3_000_000_000L),
++        decode("[1,\"a\",true,null,1.5,3000000000]", List.class));
++  }
++
++  @Test
++  public void stringMaps() {
++    Map<String, String> ordered = new LinkedHashMap<>();
++    ordered.put("z", "1");
++    ordered.put("a", null);
++    ordered.put("m\"q", "v\u00e9");
++    assertEncodes("{\"z\":\"1\",\"a\":null,\"m\\\"q\":\"v\u00e9\"}", ordered);
++    assertEncodes("{}", new HashMap<String, String>());
++    assertEncodes("{\"k\":\"v\"}", Collections.singletonMap("k", "v"));
++
++    Type mapType = new TypeToken<Map<String, String>>() {}.getType();
++    Type hashMapType = new TypeToken<HashMap<String, String>>() {}.getType();
++    assertEquals(
++        ordered, decode("{\"z\":\"1\",\"a\":null,\"m\\\"q\":\"v\u00e9\"}", Map.class, mapType));
++    assertEquals(
++        Collections.singletonMap("k", "v"), decode("{\"k\":\"v\"}", HashMap.class, hashMapType));
++    assertEquals(new HashMap<String, String>(), decode("{}", HashMap.class, hashMapType));
++    assertEquals(
++        new ArrayList<>(ordered.keySet()),
++        new ArrayList<>(
++            decode("{\"z\":\"1\",\"a\":null,\"m\\\"q\":\"v\u00e9\"}", Map.class, mapType)
++                .keySet()));
++  }
++
++  @Test
++  public void localActivityMarkerMetadata() {
++    LocalActivityMarkerMetadata withBackoff = new LocalActivityMarkerMetadata(7, 123456789L);
++    withBackoff.setBackoff(Duration.ofMillis(2000));
++    assertEncodes("{\"firstSkd\":123456789,\"atpt\":7,\"backoff\":2000}", withBackoff);
++    assertEncodes("{\"firstSkd\":0,\"atpt\":1}", new LocalActivityMarkerMetadata(1, 0L));
++    LocalActivityMarkerMetadata negative = new LocalActivityMarkerMetadata(3, -5L);
++    negative.setBackoff(Duration.ofNanos(1_500_999));
++    assertEncodes("{\"firstSkd\":-5,\"atpt\":3,\"backoff\":1}", negative);
++
++    LocalActivityMarkerMetadata back =
++        decode(
++            "{\"firstSkd\":123456789,\"atpt\":7,\"backoff\":2000}",
++            LocalActivityMarkerMetadata.class);
++    assertEquals(123456789L, back.getOriginalScheduledTimestamp());
++    assertEquals(7, back.getAttempt());
++    assertEquals(Duration.ofMillis(2000), back.getBackoff());
++
++    LocalActivityMarkerMetadata noBackoff =
++        decode("{\"firstSkd\":0,\"atpt\":1}", LocalActivityMarkerMetadata.class);
++    assertEquals(0L, noBackoff.getOriginalScheduledTimestamp());
++    assertEquals(1, noBackoff.getAttempt());
++    assertNull(noBackoff.getBackoff());
++  }
++}
+diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonPayloadConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonPayloadConverterTest.java
+new file mode 100644
+index 0000000..eb81dd2
+--- /dev/null
++++ b/temporal-sdk/src/test/java/io/temporal/common/converter/StandardJsonPayloadConverterTest.java
+@@ -0,0 +1,161 @@
++package io.temporal.common.converter;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertThrows;
++import static org.junit.Assert.assertTrue;
++
++import com.google.common.reflect.TypeToken;
++import com.google.protobuf.ByteString;
++import io.temporal.api.common.v1.Payload;
++import java.lang.reflect.Type;
++import java.time.Instant;
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.UUID;
++import java.util.concurrent.TimeUnit;
++import java.util.function.Consumer;
++import org.junit.Test;
++
++public class StandardJsonPayloadConverterTest {
++  private static final String SETTER = "WorkflowClientOptions.Builder#setDataConverter";
++
++  private static final Object[] UNSUPPORTED_VALUES = {
++    TimeUnit.SECONDS,
++    UUID.fromString("8fce64e4-6ad5-4b5c-a710-a1feda712670"),
++    Instant.EPOCH,
++    new long[] {1, 2},
++    Collections.singletonMap("k", 1),
++    Collections.singletonMap(1, "v"),
++    Arrays.asList("a", TimeUnit.SECONDS),
++    new Object[] {Instant.EPOCH}
++  };
++
++  private static void assertRejectedWithHint(Consumer<Object> encode, Object value) {
++    DataConverterException e =
++        assertThrows(DataConverterException.class, () -> encode.accept(value));
++    assertTrue(
++        "message should name the setter: " + e.getMessage(), e.getMessage().contains(SETTER));
++  }
++
++  private static Payload jsonPayload(String json) {
++    return Payload.newBuilder()
++        .putMetadata(EncodingKeys.METADATA_ENCODING_KEY, ByteString.copyFromUtf8("json/plain"))
++        .setData(ByteString.copyFromUtf8(json))
++        .build();
++  }
++
++  private static void assertDecodeFails(String json, Class<?> valueClass, Type valueType) {
++    assertThrows(
++        DataConverterException.class,
++        () ->
++            DefaultDataConverter.STANDARD_INSTANCE.fromPayload(
++                jsonPayload(json), valueClass, valueType));
++  }
++
++  @Test
++  public void standardInstanceRejectsTypesOutsideTheClosedSet() {
++    for (Object value : UNSUPPORTED_VALUES) {
++      assertRejectedWithHint(DefaultDataConverter.STANDARD_INSTANCE::toPayload, value);
 +    }
 +  }
 +
 +  @Test
-+  public void diContextMapperDoesNotInheritInternalMillisFormat() throws Exception {
-+    try (ApplicationContext context = ApplicationContext.run()) {
-+      ObjectMapper appMapper = context.getBean(ObjectMapper.class);
-+
-+      DurationCarrier carrier = new DurationCarrier();
-+      carrier.setBackoff(Duration.ofSeconds(2));
-+      String json = new String(appMapper.writeValueAsBytes(carrier));
-+
-+      Assert.assertFalse(
-+          "App DI ObjectMapper must NOT emit SDK-internal millis (2000) for Duration: " + json,
-+          json.contains("\"backoff\":2000,") || json.contains("\"backoff\":2000}"));
-+      Assert.assertTrue(
-+          "App DI ObjectMapper should emit Serde default nanos (2000000000) for Duration: " + json,
-+          json.contains("\"backoff\":2000000000"));
++  public void newDefaultInstanceRejectsTypesOutsideTheClosedSet() {
++    DataConverter converter = DefaultDataConverter.newDefaultInstance();
++    for (Object value : UNSUPPORTED_VALUES) {
++      assertRejectedWithHint(converter::toPayload, value);
 +    }
 +  }
 +
 +  @Test
-+  public void internalMapperUsesMillisFormatForAnnotatedField() throws Exception {
-+    io.temporal.internal.history.LocalActivityMarkerMetadata metadata =
-+        new io.temporal.internal.history.LocalActivityMarkerMetadata(1, 0L);
-+    metadata.setBackoff(Duration.ofSeconds(2));
-+    String json = new String(InternalSerdeMapper.get().writeValueAsBytes(metadata));
-+    Assert.assertTrue(
-+        "Internal mapper should emit millis (2000) for the @Serdeable.Serializable(using=) field: "
-+            + json,
-+        json.contains("\"backoff\":2000,") || json.contains("\"backoff\":2000}"));
++  public void unconfiguredGlobalDataConverterRejectsTypesOutsideTheClosedSet() {
++    DataConverter registered = GlobalDataConverter.get();
++    GlobalDataConverter.register(DefaultDataConverter.newDefaultInstance());
++    try {
++      for (Object value : UNSUPPORTED_VALUES) {
++        assertRejectedWithHint(GlobalDataConverter.get()::toPayload, value);
++      }
++    } finally {
++      GlobalDataConverter.register(registered);
++    }
 +  }
 +
 +  @Test
-+  public void internalMapperDoesNotForceMillisOnUnannotatedDuration() throws Exception {
-+    // A plain Duration field WITHOUT the using= binding must keep Serde's default (nanos) format,
-+    // even on the internal mapper. This proves millis is now field-scoped, not global.
-+    DurationCarrier carrier = new DurationCarrier();
-+    carrier.setBackoff(Duration.ofSeconds(2));
-+    String json = new String(InternalSerdeMapper.get().writeValueAsBytes(carrier));
-+    Assert.assertTrue(
-+        "Internal mapper should emit nanos (2000000000) for an unannotated Duration: " + json,
-+        json.contains("\"backoff\":2000000000"));
++  public void decodingATypeOutsideTheClosedSetNamesTheSetter() {
++    DataConverterException e =
++        assertThrows(
++            DataConverterException.class,
++            () ->
++                DefaultDataConverter.STANDARD_INSTANCE.fromPayload(
++                    jsonPayload("\"SECONDS\""), TimeUnit.class, TimeUnit.class));
++    assertTrue(e.getMessage(), e.getMessage().contains(SETTER));
++    assertDecodeFails("{\"k\":1}", Map.class, new TypeToken<Map<String, Integer>>() {}.getType());
++    assertDecodeFails("[\"SECONDS\"]", List.class, new TypeToken<List<TimeUnit>>() {}.getType());
++  }
++
++  @Test
++  public void charSequenceEncodesAsString() {
++    Payload payload =
++        DefaultDataConverter.STANDARD_INSTANCE.toPayload(new StringBuilder("sb")).get();
++    assertEquals("\"sb\"", payload.getData().toStringUtf8());
++  }
++
++  @Test
++  public void charSequenceMapValueEncodesAsString() {
++    Payload payload =
++        DefaultDataConverter.STANDARD_INSTANCE
++            .toPayload(Collections.singletonMap("a", new StringBuilder("v")))
++            .get();
++    assertEquals("{\"a\":\"v\"}", payload.getData().toStringUtf8());
++  }
++
++  @Test
++  public void nonFiniteDoublesRoundTrip() {
++    for (double value :
++        new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY}) {
++      Payload payload = DefaultDataConverter.STANDARD_INSTANCE.toPayload(value).get();
++      assertEquals(
++          Double.valueOf(value),
++          DefaultDataConverter.STANDARD_INSTANCE.fromPayload(payload, Double.class, Double.class));
++    }
++  }
++
++  @Test
++  public void jsonNullDecodesToNull() {
++    assertEquals(
++        null,
++        DefaultDataConverter.STANDARD_INSTANCE.fromPayload(
++            jsonPayload("null"), String.class, String.class));
++    assertEquals(
++        null,
++        DefaultDataConverter.STANDARD_INSTANCE.fromPayload(
++            jsonPayload("null"), List.class, List.class));
++  }
++
++  @Test
++  public void scalarsAreNotCoercedAcrossJsonTypes() {
++    assertDecodeFails("true", Long.class, Long.class);
++    assertDecodeFails("\"1\"", Integer.class, Integer.class);
++    assertDecodeFails("1", Boolean.class, Boolean.class);
++    assertDecodeFails("1", String.class, String.class);
++    assertDecodeFails("2147483648", Integer.class, Integer.class);
++    assertDecodeFails("1.5", Long.class, Long.class);
++    assertDecodeFails(
++        "\"not a date\"", java.time.OffsetDateTime.class, java.time.OffsetDateTime.class);
++    assertDecodeFails("[\"a\"]", String.class, String.class);
++    assertDecodeFails("\"a\"", List.class, List.class);
++    assertDecodeFails(
++        "{\"a\":1}", HashMap.class, new TypeToken<HashMap<String, String>>() {}.getType());
++  }
++
++  @Test
++  public void emptyAndMalformedDataFail() {
++    assertDecodeFails("", String.class, String.class);
++    assertDecodeFails(
++        "{not json", HashMap.class, new TypeToken<HashMap<String, String>>() {}.getType());
++    assertDecodeFails("[1,", List.class, List.class);
 +  }
 +}
 diff --git a/temporal-sdk/src/test/java/io/temporal/functional/serialization/OptionalJsonSerializationTest.java b/temporal-sdk/src/test/java/io/temporal/functional/serialization/OptionalJsonSerializationTest.java
@@ -3284,19 +3964,221 @@ index 061b8f0..f662a3a 100644
    public static class Customer {
      private String firstName;
      // we want ssn in a field here to test serialization of Optional<?> fields into json
+diff --git a/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java b/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java
+index c5068d8..796ac33 100644
+--- a/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java
+@@ -54,7 +54,7 @@ public class WorkflowIdSignedPayloadsTest {
+ 
+   private static final DataConverter codecDataConverter =
+       new CodecDataConverter(
+-          DefaultDataConverter.STANDARD_INSTANCE,
++          GlobalDataConverter.get(),
+           Collections.singletonList(new PayloadEncoderWithWorkflowIdSignature()),
+           true);
+ 
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/common/NexusFailureInfoGoldenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/common/NexusFailureInfoGoldenTest.java
+new file mode 100644
+index 0000000..c59ba85
+--- /dev/null
++++ b/temporal-sdk/src/test/java/io/temporal/internal/common/NexusFailureInfoGoldenTest.java
+@@ -0,0 +1,81 @@
++package io.temporal.internal.common;
++
++import static org.junit.Assert.assertEquals;
++
++import com.google.protobuf.ByteString;
++import io.nexusrpc.FailureInfo;
++import io.temporal.api.common.v1.Payload;
++import org.junit.Test;
++
++/**
++ * Pins the exact JSON written into the details payload of a Nexus failure converted to a Temporal
++ * {@code ApplicationFailure}.
++ */
++public class NexusFailureInfoGoldenTest {
++
++  private static void assertDetailsJson(String expectedJson, FailureInfo failureInfo) {
++    Payload payload =
++        NexusUtil.nexusFailureToTemporalFailure(failureInfo, true)
++            .getApplicationFailureInfo()
++            .getDetails()
++            .getPayloads(0);
++    assertEquals(ByteString.copyFromUtf8("json/plain"), payload.getMetadataMap().get("encoding"));
++    assertEquals(1, payload.getMetadataCount());
++    assertEquals(expectedJson, payload.getData().toStringUtf8());
++  }
++
++  @Test
++  public void metadataAndDetails() {
++    assertDetailsJson(
++        "{\"message\":\"\",\"stackTrace\":null,\"metadata\":{\"custom-key\":\"custom-value\"},"
++            + "\"detailsJson\":\"{\\\"detail\\\":\\\"some data\\\"}\"}",
++        FailureInfo.newBuilder()
++            .setMessage("m")
++            .putMetadata("custom-key", "custom-value")
++            .setDetailsJson("{\"detail\":\"some data\"}")
++            .build());
++  }
++
++  @Test
++  public void escapedMetadataAndNullDetails() {
++    assertDetailsJson(
++        "{\"message\":\"\",\"stackTrace\":null,\"metadata\":{\"a\":\"q\\\"\u00e9\",\"b\":\"2\"},"
++            + "\"detailsJson\":null}",
++        FailureInfo.newBuilder()
++            .setMessage("m")
++            .putMetadata("b", "2")
++            .putMetadata("a", "q\"\u00e9")
++            .build());
++  }
++
++  @Test
++  public void detailsWithoutMetadata() {
++    assertDetailsJson(
++        "{\"message\":\"\",\"stackTrace\":null,\"metadata\":{},\"detailsJson\":\"[1, \\\"x\\\"]\"}",
++        FailureInfo.newBuilder().setMessage("m").setDetailsJson("[1, \"x\"]").build());
++  }
++
++  @Test
++  public void stackTrace() {
++    assertDetailsJson(
++        "{\"message\":\"\",\"stackTrace\":\"at a.b(C.java:1)\\n\\tat d\",\"metadata\":{\"k\":\"v\"},"
++            + "\"detailsJson\":null}",
++        FailureInfo.newBuilder()
++            .setMessage("m")
++            .setStackTrace("at a.b(C.java:1)\n\tat d")
++            .putMetadata("k", "v")
++            .build());
++  }
++
++  @Test
++  public void emptyStringsAreKept() {
++    assertDetailsJson(
++        "{\"message\":\"\",\"stackTrace\":\"\",\"metadata\":{\"k\":\"\"},\"detailsJson\":\"\"}",
++        FailureInfo.newBuilder()
++            .setMessage("m")
++            .setStackTrace("")
++            .setDetailsJson("")
++            .putMetadata("k", "")
++            .build());
++  }
++}
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/common/SearchAttributeGoldenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/common/SearchAttributeGoldenTest.java
+new file mode 100644
+index 0000000..e67ea2a
+--- /dev/null
++++ b/temporal-sdk/src/test/java/io/temporal/internal/common/SearchAttributeGoldenTest.java
+@@ -0,0 +1,96 @@
++package io.temporal.internal.common;
++
++import static org.junit.Assert.assertEquals;
++
++import com.google.protobuf.ByteString;
++import io.temporal.api.common.v1.Payload;
++import io.temporal.api.common.v1.SearchAttributes;
++import io.temporal.common.SearchAttributeKey;
++import io.temporal.common.SearchAttributeUpdate;
++import java.time.OffsetDateTime;
++import java.time.ZoneOffset;
++import java.util.Arrays;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Map;
++import org.junit.Test;
++
++/** Pins the payloads written for search attributes, which the server stores and returns as is. */
++public class SearchAttributeGoldenTest {
++  private static final OffsetDateTime TIME =
++      OffsetDateTime.of(2026, 10, 15, 12, 34, 56, 789_000_000, ZoneOffset.ofHours(-4));
++
++  private static void assertTyped(String type, String json, SearchAttributeUpdate<?> update) {
++    Payload payload =
++        SearchAttributesUtil.encodeTypedUpdates(update)
++            .getIndexedFieldsOrThrow(update.getKey().getName());
++    assertEquals(json, payload.getData().toStringUtf8());
++    assertEquals(ByteString.copyFromUtf8("json/plain"), payload.getMetadataOrThrow("encoding"));
++    assertEquals(ByteString.copyFromUtf8(type), payload.getMetadataOrThrow("type"));
++  }
++
++  @Test
++  public void typedValues() {
++    assertTyped("Text", "\"t\"", SearchAttributeKey.forText("a").valueSet("t"));
++    assertTyped("Keyword", "\"k\"", SearchAttributeKey.forKeyword("a").valueSet("k"));
++    assertTyped("Int", "5", SearchAttributeKey.forLong("a").valueSet(5L));
++    assertTyped("Double", "1.5", SearchAttributeKey.forDouble("a").valueSet(1.5));
++    assertTyped("Bool", "true", SearchAttributeKey.forBoolean("a").valueSet(true));
++    assertTyped(
++        "Datetime",
++        "\"2026-10-15T12:34:56.789-04:00\"",
++        SearchAttributeKey.forOffsetDateTime("a").valueSet(TIME));
++    assertTyped(
++        "KeywordList",
++        "[\"x\",\"y\"]",
++        SearchAttributeKey.forKeywordList("a").valueSet(Arrays.asList("x", "y")));
++  }
++
++  @Test
++  public void typedUnsetIsJsonNull() {
++    assertTyped("Keyword", "null", SearchAttributeKey.forKeyword("a").valueUnset());
++    assertTyped("Int", "null", SearchAttributeKey.forLong("a").valueUnset());
++    assertTyped("KeywordList", "null", SearchAttributeKey.forKeywordList("a").valueUnset());
++  }
++
++  @Test
++  @SuppressWarnings("deprecation")
++  public void legacyValues() {
++    Map<String, Object> values = new LinkedHashMap<>();
++    values.put("short", (short) 3);
++    values.put("byte", (byte) 4);
++    values.put("float", 1.5f);
++    values.put("int", 7);
++    values.put("long", 8L);
++    values.put("string", "s");
++    values.put("bool", false);
++    values.put("time", TIME);
++    values.put("list", Arrays.asList("p", "q"));
++    values.put("single", Arrays.asList("only"));
++    SearchAttributes encoded = SearchAttributesUtil.encode(values);
++    assertLegacy(encoded, "short", "Int", "3");
++    assertLegacy(encoded, "byte", "Int", "4");
++    assertLegacy(encoded, "float", "Double", "1.5");
++    assertLegacy(encoded, "int", "Int", "7");
++    assertLegacy(encoded, "long", "Int", "8");
++    assertLegacy(encoded, "string", "Text", "\"s\"");
++    assertLegacy(encoded, "bool", "Bool", "false");
++    assertLegacy(encoded, "time", "Datetime", "\"2026-10-15T12:34:56.789-04:00\"");
++    assertLegacy(encoded, "list", "Text", "[\"p\",\"q\"]");
++    assertLegacy(encoded, "single", "Text", "\"only\"");
++
++    Map<String, List<?>> decoded = SearchAttributesUtil.decode(encoded);
++    assertEquals(Arrays.asList(3L), decoded.get("short"));
++    assertEquals(Arrays.asList(1.5d), decoded.get("float"));
++    assertEquals(Arrays.asList("s"), decoded.get("string"));
++    assertEquals(Arrays.asList(false), decoded.get("bool"));
++    assertEquals(Arrays.asList(TIME), decoded.get("time"));
++    assertEquals(Arrays.asList("p", "q"), decoded.get("list"));
++  }
++
++  private static void assertLegacy(SearchAttributes sa, String name, String type, String json) {
++    Payload payload = sa.getIndexedFieldsOrThrow(name);
++    assertEquals(json, payload.getData().toStringUtf8());
++    assertEquals(ByteString.copyFromUtf8(type), payload.getMetadataOrThrow("type"));
++  }
++}
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java b/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java
 new file mode 100644
-index 0000000..de185ab
+index 0000000..5bbb19e
 --- /dev/null
 +++ b/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +package io.temporal.internal.history;
 +
 +import static org.junit.Assert.assertEquals;
 +import static org.junit.Assert.assertNotEquals;
 +
-+import io.micronaut.serde.ObjectMapper;
-+import io.temporal.common.converter.InternalSerdeMapper;
++import io.temporal.api.common.v1.Payload;
++import io.temporal.common.converter.DefaultDataConverter;
 +import java.time.Duration;
 +import org.junit.Test;
 +
@@ -3305,32 +4187,105 @@ index 0000000..de185ab
 +
 +  @Test
 +  public void roundTripPreservesAllFields() throws Exception {
-+    ObjectMapper mapper = InternalSerdeMapper.get();
 +    LocalActivityMarkerMetadata m = new LocalActivityMarkerMetadata(7, 123456789L);
 +    m.setBackoff(Duration.ofMillis(2000));
 +
-+    String json = new String(mapper.writeValueAsBytes(m));
++    Payload payload = DefaultDataConverter.STANDARD_INSTANCE.toPayload(m).get();
++    String json = payload.getData().toStringUtf8();
 +    assertNotEquals("must not serialize to empty object", "{}", json);
 +
 +    LocalActivityMarkerMetadata back =
-+        mapper.readValue(json.getBytes(), LocalActivityMarkerMetadata.class);
++        DefaultDataConverter.STANDARD_INSTANCE.fromPayload(
++            payload, LocalActivityMarkerMetadata.class, LocalActivityMarkerMetadata.class);
 +    assertEquals(7, back.getAttempt());
 +    assertEquals(123456789L, back.getOriginalScheduledTimestamp());
 +    assertEquals(Duration.ofMillis(2000), back.getBackoff());
 +  }
 +}
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenGoldenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenGoldenTest.java
+new file mode 100644
+index 0000000..53eb157
+--- /dev/null
++++ b/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenGoldenTest.java
+@@ -0,0 +1,68 @@
++package io.temporal.internal.nexus;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNull;
++
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.util.Base64;
++import org.junit.Test;
++
++/**
++ * Pins the exact bytes of generated operation tokens, which other SDKs and the server parse, and
++ * confirms each token parses back to the values it was generated from.
++ */
++public class OperationTokenGoldenTest {
++
++  private static String json(String token) {
++    return new String(Base64.getUrlDecoder().decode(token), StandardCharsets.UTF_8);
++  }
++
++  @Test
++  public void workflowRunTokenEscapesStrings() throws IOException {
++    String token =
++        OperationTokenUtil.generateWorkflowRunOperationToken("w\"\u00e9\ud83d\ude00/\n", "n\\s");
++    assertEquals(
++        "{\"t\":1,\"ns\":\"n\\\\s\",\"wid\":\"w\\\"\u00e9\ud83d\ude00/\\n\"}", json(token));
++    assertEquals("eyJ0IjoxLCJucyI6Im5cXHMiLCJ3aWQiOiJ3XCLDqfCfmIAvXG4ifQ", token);
++
++    OperationToken parsed = OperationTokenUtil.loadOperationToken(token);
++    assertEquals(OperationTokenType.WORKFLOW_RUN, parsed.getType());
++    assertEquals("n\\s", parsed.getNamespace());
++    assertEquals("w\"\u00e9\ud83d\ude00/\n", parsed.getWorkflowId());
++  }
++
++  @Test
++  public void workflowRunTokenWithNullNamespace() throws IOException {
++    String token = OperationTokenUtil.generateWorkflowRunOperationToken("wf-1", null);
++    assertEquals("{\"t\":1,\"ns\":null,\"wid\":\"wf-1\"}", json(token));
++    assertEquals("eyJ0IjoxLCJucyI6bnVsbCwid2lkIjoid2YtMSJ9", token);
++  }
++
++  @Test
++  public void activityExecutionTokenWithRunId() throws IOException {
++    String token =
++        OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "run-1", "ns");
++    assertEquals("{\"t\":2,\"ns\":\"ns\",\"aid\":\"act-1\",\"rid\":\"run-1\"}", json(token));
++    assertEquals("eyJ0IjoyLCJucyI6Im5zIiwiYWlkIjoiYWN0LTEiLCJyaWQiOiJydW4tMSJ9", token);
++
++    OperationToken parsed = OperationTokenUtil.loadOperationToken(token);
++    assertEquals("act-1", parsed.getActivityId());
++    assertEquals("run-1", parsed.getRunId());
++  }
++
++  @Test
++  public void workflowUpdateTokenOmitsEmptyAndNullRunId() throws IOException {
++    String expected = "{\"t\":3,\"ns\":\"ns\",\"wid\":\"w\",\"uid\":\"u\"}";
++    String emptyRunId = OperationTokenUtil.generateWorkflowUpdateOperationToken("ns", "w", "", "u");
++    String nullRunId =
++        OperationTokenUtil.generateWorkflowUpdateOperationToken("ns", "w", null, "u");
++    assertEquals(expected, json(emptyRunId));
++    assertEquals(expected, json(nullRunId));
++    assertEquals("eyJ0IjozLCJucyI6Im5zIiwid2lkIjoidyIsInVpZCI6InUifQ", emptyRunId);
++
++    OperationToken parsed = OperationTokenUtil.loadOperationToken(nullRunId);
++    assertEquals("u", parsed.getUpdateId());
++    assertNull(parsed.getRunId());
++  }
++}
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java
-index a95cf90..f210703 100644
+index a95cf90..ece0caf 100644
 --- a/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/internal/nexus/OperationTokenTest.java
-@@ -1,19 +1,15 @@
+@@ -1,19 +1,13 @@
  package io.temporal.internal.nexus;
  
 -import com.fasterxml.jackson.core.JsonProcessingException;
 -import com.fasterxml.jackson.databind.*;
 -import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-+import io.micronaut.core.type.Argument;
-+import io.temporal.common.converter.InternalSerdeMapper;
  import java.io.IOException;
  import java.util.Base64;
  import org.junit.Assert;
@@ -3346,7 +4301,7 @@ index a95cf90..f210703 100644
  
    @Test
    public void operationTokenTypeValues() {
-@@ -24,39 +20,66 @@ public class OperationTokenTest {
+@@ -24,39 +18,64 @@ public class OperationTokenTest {
    }
  
    @Test
@@ -3402,15 +4357,13 @@ index a95cf90..f210703 100644
    @Test
 -  public void deserializeWorkflowRunTokenWithVersion() throws IOException {
 +  public void deserializeTokenWithNonZeroVersion() throws IOException {
-+    // loadOperationToken rejects any non-zero "v", so this exercises the raw Serde round trip
-+    // directly (no jackson-databind) to prove a non-zero version still deserializes into the
-+    // field correctly, matching upstream's equivalent direct-ObjectMapper test.
++    // loadOperationToken rejects any non-zero "v", so this calls the parse step directly to prove
++    // a non-zero version still deserializes into the field correctly.
      String json = "{\"t\":1,\"ns\":\"namespace\",\"wid\":\"workflowId\",\"v\":1}";
 -    JavaType reference = new ObjectMapper().getTypeFactory().constructType(OperationToken.class);
 -    OperationToken token = new ObjectMapper().readValue(json.getBytes(), reference);
 -    // Assert that the serialized JSON is as expected
-+    OperationToken token =
-+        InternalSerdeMapper.get().readValue(json.getBytes(), Argument.of(OperationToken.class));
++    OperationToken token = OperationTokenUtil.parse(json.getBytes());
      Assert.assertEquals(OperationTokenType.WORKFLOW_RUN, token.getType());
 -    Assert.assertEquals(new Integer(1), token.getVersion());
 +    Assert.assertEquals(Integer.valueOf(1), token.getVersion());
@@ -3433,7 +4386,7 @@ index a95cf90..f210703 100644
      Assert.assertEquals("namespace", token.getNamespace());
      Assert.assertEquals("workflowId", token.getWorkflowId());
    }
-@@ -100,7 +123,7 @@ public class OperationTokenTest {
+@@ -100,7 +119,7 @@ public class OperationTokenTest {
    }
  
    @Test
@@ -3442,7 +4395,7 @@ index a95cf90..f210703 100644
      String encoded = OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "ns");
      OperationToken token = OperationTokenUtil.loadOperationToken(encoded);
      Assert.assertEquals(OperationTokenType.ACTIVITY_EXECUTION, token.getType());
-@@ -115,7 +138,7 @@ public class OperationTokenTest {
+@@ -115,7 +134,7 @@ public class OperationTokenTest {
    }
  
    @Test
@@ -3451,7 +4404,7 @@ index a95cf90..f210703 100644
      String encoded =
          OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "run-1", "ns");
      OperationToken token = OperationTokenUtil.loadOperationToken(encoded);
-@@ -128,7 +151,7 @@ public class OperationTokenTest {
+@@ -128,7 +147,7 @@ public class OperationTokenTest {
    }
  
    @Test
@@ -3460,7 +4413,7 @@ index a95cf90..f210703 100644
      // The header-token path passes runId=null and must produce a payload byte-identical to the
      // two-arg overload — the runId-aware overload is the *only* one used in code now.
      String withRunId =
-@@ -138,13 +161,31 @@ public class OperationTokenTest {
+@@ -138,13 +157,31 @@ public class OperationTokenTest {
    }
  
    @Test
@@ -3493,7 +4446,7 @@ index a95cf90..f210703 100644
    @Test
    public void malformedActivityTokenRejected() {
      String malformed = "{\"t\":2,\"ns\":\"ns\",\"aid\":\"\"}";
-@@ -173,7 +214,116 @@ public class OperationTokenTest {
+@@ -173,7 +210,116 @@ public class OperationTokenTest {
    }
  
    @Test
@@ -3611,6 +4564,29 @@ index a95cf90..f210703 100644
      String activityToken =
          OperationTokenUtil.generateActivityExecutionOperationToken("act-1", "ns");
      IllegalArgumentException ex =
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/PayloadSerializerTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/PayloadSerializerTest.java
+index 4c52864..cce0d9b 100644
+--- a/temporal-sdk/src/test/java/io/temporal/internal/nexus/PayloadSerializerTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/internal/nexus/PayloadSerializerTest.java
+@@ -8,8 +8,8 @@ import io.temporal.api.common.v1.Payloads;
+ import io.temporal.api.common.v1.WorkflowExecution;
+ import io.temporal.common.converter.DataConverter;
+ import io.temporal.common.converter.DataConverterException;
+-import io.temporal.common.converter.DefaultDataConverter;
+ import io.temporal.common.converter.EncodedValuesTest;
++import io.temporal.common.converter.GlobalDataConverter;
+ import io.temporal.common.converter.PayloadValidationException;
+ import io.temporal.failure.ApplicationFailure;
+ import io.temporal.payload.codec.PayloadCodecException;
+@@ -23,7 +23,7 @@ import org.junit.Assert;
+ import org.junit.Test;
+ 
+ public class PayloadSerializerTest {
+-  static DataConverter dataConverter = DefaultDataConverter.STANDARD_INSTANCE;
++  static DataConverter dataConverter = GlobalDataConverter.get();
+   PayloadSerializer payloadSerializer = new PayloadSerializer(dataConverter);
+ 
+   @Test
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/nexus/UpdateRunTokenTest.java b/temporal-sdk/src/test/java/io/temporal/internal/nexus/UpdateRunTokenTest.java
 index 5895d29..fed7673 100644
 --- a/temporal-sdk/src/test/java/io/temporal/internal/nexus/UpdateRunTokenTest.java
@@ -3699,9 +4675,27 @@ index 634a052..ed8cc25 100644
        this.t2 = t2;
      }
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java b/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
-index 5a6d54f..4435d43 100644
+index 5a6d54f..6dcdda6 100644
 --- a/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/internal/statemachines/VersionStateMachineTest.java
+@@ -14,7 +14,7 @@ import io.temporal.api.history.v1.HistoryEvent;
+ import io.temporal.api.history.v1.MarkerRecordedEventAttributes;
+ import io.temporal.api.history.v1.TimerFiredEventAttributes;
+ import io.temporal.common.converter.DataConverter;
+-import io.temporal.common.converter.DefaultDataConverter;
++import io.temporal.common.converter.GlobalDataConverter;
+ import io.temporal.internal.history.VersionMarkerUtils;
+ import io.temporal.worker.NonDeterministicException;
+ import io.temporal.worker.VersionPreference;
+@@ -29,7 +29,7 @@ import org.junit.Test;
+ 
+ public class VersionStateMachineTest {
+ 
+-  private final DataConverter converter = DefaultDataConverter.STANDARD_INSTANCE;
++  private final DataConverter converter = GlobalDataConverter.get();
+   private WorkflowStateMachines stateMachines;
+ 
+   private static final List<
 @@ -1419,7 +1419,7 @@ public class VersionStateMachineTest {
                        null,
                        c);
@@ -3713,7 +4707,7 @@ index 5a6d54f..4435d43 100644
      /*
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/sync/SerializableRetryOptionsRoundTripTest.java b/temporal-sdk/src/test/java/io/temporal/internal/sync/SerializableRetryOptionsRoundTripTest.java
 new file mode 100644
-index 0000000..8de0e54
+index 0000000..b0efe4b
 --- /dev/null
 +++ b/temporal-sdk/src/test/java/io/temporal/internal/sync/SerializableRetryOptionsRoundTripTest.java
 @@ -0,0 +1,39 @@
@@ -3725,7 +4719,7 @@ index 0000000..8de0e54
 +
 +import io.temporal.api.common.v1.Payloads;
 +import io.temporal.common.converter.DataConverter;
-+import io.temporal.common.converter.DefaultDataConverter;
++import io.temporal.common.converter.GlobalDataConverter;
 +import io.temporal.internal.sync.WorkflowRetryerInternal.SerializableRetryOptions;
 +import java.util.Optional;
 +import org.junit.Test;
@@ -3738,7 +4732,7 @@ index 0000000..8de0e54
 +
 +  @Test
 +  public void roundTripPreservesAllFields() {
-+    DataConverter dc = DefaultDataConverter.STANDARD_INSTANCE;
++    DataConverter dc = GlobalDataConverter.get();
 +    SerializableRetryOptions opts =
 +        new SerializableRetryOptions(1000L, 2.0, 5, 60000L, new String[] {"IllegalArgument"});
 +
@@ -3839,6 +4833,125 @@ index c6a2922..c7e94e7 100644
    public static class WorkflowParams {
  
      public int ChainSequence;
+diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/MultiContextProtocolJsonTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/MultiContextProtocolJsonTest.java
+new file mode 100644
+index 0000000..c84a487
+--- /dev/null
++++ b/temporal-sdk/src/test/java/io/temporal/workflow/MultiContextProtocolJsonTest.java
+@@ -0,0 +1,89 @@
++package io.temporal.workflow;
++
++import static org.junit.Assert.assertEquals;
++
++import io.micronaut.context.ApplicationContext;
++import io.temporal.activity.ActivityInterface;
++import io.temporal.activity.ActivityMethod;
++import io.temporal.activity.LocalActivityOptions;
++import io.temporal.client.WorkflowOptions;
++import io.temporal.common.SearchAttributeKey;
++import io.temporal.testing.CloudTestExclusion.RequiresCloudProvisioning;
++import io.temporal.testing.CloudTestExclusionNote;
++import io.temporal.testing.internal.SDKTestOptions;
++import io.temporal.testing.internal.SDKTestWorkflowRule;
++import java.time.Duration;
++import org.junit.Rule;
++import org.junit.Test;
++import org.junit.experimental.categories.Category;
++
++/**
++ * Local-activity markers and search attributes are SDK protocol JSON that must be written no matter
++ * which application contexts exist in the JVM or whether they are still running.
++ */
++@CloudTestExclusionNote(
++    "Cloud CI does not provision the custom search attributes required by this test.")
++@Category(RequiresCloudProvisioning.class)
++public class MultiContextProtocolJsonTest {
++  private static final SearchAttributeKey<String> KEYWORD =
++      SearchAttributeKey.forKeyword("CustomKeywordField");
++
++  @Rule
++  public SDKTestWorkflowRule testWorkflowRule =
++      SDKTestWorkflowRule.newBuilder()
++          .setWorkflowTypes(LocalActivityAndSearchAttributeWorkflowImpl.class)
++          .setActivityImplementations(new EchoActivityImpl())
++          .registerSearchAttribute(KEYWORD)
++          .build();
++
++  @Test
++  public void localActivityAndSearchAttributeSucceedAfterAnotherContextClosed() {
++    ApplicationContext context = ApplicationContext.run();
++    context.close();
++
++    WorkflowOptions options =
++        SDKTestOptions.newWorkflowOptionsWithTimeouts(testWorkflowRule.getTaskQueue()).toBuilder()
++            .setWorkflowRunTimeout(Duration.ofSeconds(20))
++            .build();
++    LocalActivityAndSearchAttributeWorkflow workflow =
++        testWorkflowRule
++            .getWorkflowClient()
++            .newWorkflowStub(LocalActivityAndSearchAttributeWorkflow.class, options);
++    assertEquals("echo:value", workflow.execute("value"));
++  }
++
++  @WorkflowInterface
++  public interface LocalActivityAndSearchAttributeWorkflow {
++    @WorkflowMethod
++    String execute(String input);
++  }
++
++  @ActivityInterface
++  public interface EchoActivity {
++    @ActivityMethod
++    String echo(String input);
++  }
++
++  public static class LocalActivityAndSearchAttributeWorkflowImpl
++      implements LocalActivityAndSearchAttributeWorkflow {
++    @Override
++    public String execute(String input) {
++      EchoActivity activity =
++          Workflow.newLocalActivityStub(
++              EchoActivity.class,
++              LocalActivityOptions.newBuilder()
++                  .setStartToCloseTimeout(Duration.ofSeconds(5))
++                  .build());
++      String result = activity.echo(input);
++      Workflow.upsertTypedSearchAttributes(KEYWORD.valueSet(result));
++      return result;
++    }
++  }
++
++  public static class EchoActivityImpl implements EchoActivity {
++    @Override
++    public String echo(String input) {
++      return "echo:" + input;
++    }
++  }
++}
+diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/failure/FailureEncodingTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/failure/FailureEncodingTest.java
+index 16af81c..a0e1026 100644
+--- a/temporal-sdk/src/test/java/io/temporal/workflow/failure/FailureEncodingTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/workflow/failure/FailureEncodingTest.java
+@@ -15,7 +15,7 @@ import io.temporal.client.WorkflowClientOptions;
+ import io.temporal.client.WorkflowException;
+ import io.temporal.client.WorkflowOptions;
+ import io.temporal.common.converter.CodecDataConverter;
+-import io.temporal.common.converter.DefaultDataConverter;
++import io.temporal.common.converter.GlobalDataConverter;
+ import io.temporal.failure.ActivityFailure;
+ import io.temporal.failure.TemporalFailure;
+ import io.temporal.internal.testing.WorkflowTestingTest;
+@@ -71,9 +71,7 @@ public class FailureEncodingTest {
+     PrefixPayloadCodec prefixPayloadCodec = new PrefixPayloadCodec();
+     CodecDataConverter dataConverter =
+         new CodecDataConverter(
+-            DefaultDataConverter.newDefaultInstance(),
+-            Collections.singletonList(prefixPayloadCodec),
+-            true);
++            GlobalDataConverter.get(), Collections.singletonList(prefixPayloadCodec), true);
+ 
+     WorkflowClientOptions workflowClientOptions =
+         WorkflowClientOptions.newBuilder()
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
 index 4fd89f0..894ed33 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
@@ -3853,7 +4966,7 @@ index 4fd89f0..894ed33 100644
  
    public static class TestNexus implements TestWorkflow1 {
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java
-index 88ff329..b7cab16 100644
+index 88ff329..b52621a 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationInputDeserializationErrorPropagationTest.java
 @@ -1,5 +1,7 @@
@@ -3864,6 +4977,15 @@ index 88ff329..b7cab16 100644
  import io.nexusrpc.Operation;
  import io.nexusrpc.Service;
  import io.nexusrpc.handler.HandlerException;
+@@ -12,7 +14,7 @@ import io.temporal.api.failure.v1.Failure;
+ import io.temporal.client.WorkflowClientOptions;
+ import io.temporal.client.WorkflowFailedException;
+ import io.temporal.common.converter.DataConverter;
+-import io.temporal.common.converter.DefaultDataConverter;
++import io.temporal.common.converter.GlobalDataConverter;
+ import io.temporal.common.converter.PayloadValidationException;
+ import io.temporal.failure.ApplicationFailure;
+ import io.temporal.failure.NexusOperationFailure;
 @@ -212,7 +214,21 @@ public class OperationInputDeserializationErrorPropagationTest {
      }
    }
@@ -3887,6 +5009,15 @@ index 88ff329..b7cab16 100644
    public static class FailureMode {
      public String mode;
  
+@@ -246,7 +262,7 @@ public class OperationInputDeserializationErrorPropagationTest {
+    * which fails with the exception that value names.
+    */
+   private static class PoisonInputDataConverter implements DataConverter {
+-    private final DataConverter delegate = DefaultDataConverter.STANDARD_INSTANCE;
++    private final DataConverter delegate = GlobalDataConverter.get();
+ 
+     @Override
+     public <T> Optional<Payload> toPayload(T value) {
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/TerminateWorkflowAsyncOperationTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/TerminateWorkflowAsyncOperationTest.java
 index 792f6e2..b0265dd 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/TerminateWorkflowAsyncOperationTest.java
@@ -3983,6 +5114,81 @@ index 9e08de1..160ef92 100644
          } else if (choice == 1) {
            Workflow.getVersion("test version " + i, Workflow.DEFAULT_VERSION, 1);
          } else {
+diff --git a/temporal-sdk/src/testDataConverterAgent/java/io/temporal/testagent/TestDataConverterAgent.java b/temporal-sdk/src/testDataConverterAgent/java/io/temporal/testagent/TestDataConverterAgent.java
+new file mode 100644
+index 0000000..c3d286b
+--- /dev/null
++++ b/temporal-sdk/src/testDataConverterAgent/java/io/temporal/testagent/TestDataConverterAgent.java
+@@ -0,0 +1,69 @@
++package io.temporal.testagent;
++
++import java.lang.instrument.Instrumentation;
++import java.lang.reflect.Array;
++import java.lang.reflect.InvocationTargetException;
++import java.util.Map;
++
++/**
++ * Javaagent that registers an application-style {@code GlobalDataConverter}, backed by a Micronaut
++ * Serde {@code ObjectMapper}, in {@code premain} before any test code runs. SDK tests pass
++ * application types such as enums and {@code @Serdeable} records through the default converters,
++ * which the SDK's own JSON converter does not handle. Registration has to happen eagerly because a
++ * lazy build runs on whichever thread happens to be first, and that thread is sometimes the
++ * time-skipping virtual clock's {@code "Timer task"} thread, which then stalls.
++ *
++ * <p>Resolves the SDK's classes by name via reflection, so this agent has no compile- or run-time
++ * dependency on the SDK. A JVM whose classpath has no {@code temporal-sdk} (e.g.
++ * temporal-workflowcheck's tests) leaves {@link #premain} a no-op.
++ *
++ * <p>Not part of the published SDK; wired only onto the fork's own test JVMs by {@code
++ * gradle/java.gradle}.
++ */
++public final class TestDataConverterAgent {
++  private TestDataConverterAgent() {}
++
++  public static void premain(String agentArgs, Instrumentation instrumentation) {
++    ClassLoader loader = ClassLoader.getSystemClassLoader();
++    Class<?> objectMapperClass;
++    Class<?> payloadConverterClass;
++    Class<?> micronautConverterClass;
++    Class<?> dataConverterClass;
++    Class<?> defaultConverterClass;
++    Class<?> globalConverterClass;
++    try {
++      objectMapperClass = Class.forName("io.micronaut.serde.ObjectMapper", false, loader);
++      String converterPackage = "io.temporal.common.converter.";
++      payloadConverterClass = Class.forName(converterPackage + "PayloadConverter", false, loader);
++      micronautConverterClass =
++          Class.forName(converterPackage + "MicronautSerdePayloadConverter", false, loader);
++      dataConverterClass = Class.forName(converterPackage + "DataConverter", false, loader);
++      defaultConverterClass =
++          Class.forName(converterPackage + "DefaultDataConverter", false, loader);
++      globalConverterClass = Class.forName(converterPackage + "GlobalDataConverter", false, loader);
++    } catch (ClassNotFoundException e) {
++      return;
++    }
++    try {
++      Object mapper =
++          objectMapperClass
++              .getMethod("create", Map.class, String[].class)
++              .invoke(null, Map.of(), (Object) new String[] {"io.temporal.common.converter"});
++      Object appConverter =
++          micronautConverterClass.getConstructor(objectMapperClass).newInstance(mapper);
++      Object overrides = Array.newInstance(payloadConverterClass, 1);
++      Array.set(overrides, 0, appConverter);
++      Object baseConverter = defaultConverterClass.getMethod("newDefaultInstance").invoke(null);
++      Object converter =
++          defaultConverterClass
++              .getMethod("withPayloadConverterOverrides", overrides.getClass())
++              .invoke(baseConverter, overrides);
++      globalConverterClass.getMethod("register", dataConverterClass).invoke(null, converter);
++    } catch (InvocationTargetException e) {
++      throw new IllegalStateException(
++          "Failed to register the test GlobalDataConverter", e.getCause());
++    } catch (ReflectiveOperationException e) {
++      throw new IllegalStateException("Failed to register the test GlobalDataConverter", e);
++    }
++  }
++}
 diff --git a/temporal-sdk/src/virtualThreadTests/java/io/temporal/worker/WorkerWithVirtualThreadsStressTests.java b/temporal-sdk/src/virtualThreadTests/java/io/temporal/worker/WorkerWithVirtualThreadsStressTests.java
 index e50628b..522e117 100644
 --- a/temporal-sdk/src/virtualThreadTests/java/io/temporal/worker/WorkerWithVirtualThreadsStressTests.java
@@ -4164,6 +5370,52 @@ index 0074aa0..2352e93 100644
    @Override
    public void close() {}
  }
+diff --git a/temporal-test-server/src/test/java/io/temporal/testserver/functional/MultiOperationTest.java b/temporal-test-server/src/test/java/io/temporal/testserver/functional/MultiOperationTest.java
+index 6406b88..f1b73f1 100644
+--- a/temporal-test-server/src/test/java/io/temporal/testserver/functional/MultiOperationTest.java
++++ b/temporal-test-server/src/test/java/io/temporal/testserver/functional/MultiOperationTest.java
+@@ -18,7 +18,7 @@ import io.temporal.api.update.v1.Request;
+ import io.temporal.api.update.v1.WaitPolicy;
+ import io.temporal.api.workflowservice.v1.*;
+ import io.temporal.client.*;
+-import io.temporal.common.converter.DefaultDataConverter;
++import io.temporal.common.converter.GlobalDataConverter;
+ import io.temporal.serviceclient.StatusUtils;
+ import io.temporal.testing.internal.SDKTestWorkflowRule;
+ import io.temporal.testserver.functional.common.TestWorkflows;
+@@ -400,7 +400,7 @@ public class MultiOperationTest {
+                     Input.newBuilder()
+                         .setName("update")
+                         .setArgs(
+-                            DefaultDataConverter.newDefaultInstance()
++                            GlobalDataConverter.get()
+                                 .toPayloads(TestWorkflows.UpdateType.COMPLETE)
+                                 .get())
+                         .build())
+diff --git a/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java b/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java
+index decbbdc..460cc7d 100644
+--- a/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java
++++ b/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java
+@@ -12,6 +12,7 @@ import io.temporal.api.workflowservice.v1.UpdateWorkflowExecutionRequest;
+ import io.temporal.api.workflowservice.v1.UpdateWorkflowExecutionResponse;
+ import io.temporal.client.*;
+ import io.temporal.common.converter.DefaultDataConverter;
++import io.temporal.common.converter.GlobalDataConverter;
+ import io.temporal.testing.internal.SDKTestWorkflowRule;
+ import io.temporal.testserver.functional.common.TestWorkflows;
+ import io.temporal.workflow.Workflow;
+@@ -669,10 +670,7 @@ public class WorkflowUpdateTest {
+                             .setInput(
+                                 Input.newBuilder()
+                                     .setName("update")
+-                                    .setArgs(
+-                                        DefaultDataConverter.newDefaultInstance()
+-                                            .toPayloads(type)
+-                                            .get())
++                                    .setArgs(GlobalDataConverter.get().toPayloads(type).get())
+                                     .build())
+                             .setMeta(Meta.newBuilder().setUpdateId(updateId).build()))
+                     .setWaitPolicy(WaitPolicy.newBuilder().setLifecycleStage(stage).build())
 diff --git a/temporal-testing/build.gradle b/temporal-testing/build.gradle
 index 3715605..50381dd 100644
 --- a/temporal-testing/build.gradle
