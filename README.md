@@ -24,9 +24,13 @@ DataConverter converter =
         .withPayloadConverterOverrides(new MicronautSerdePayloadConverter(appObjectMapper));
 ```
 
-The no-arg constructor used by SDK defaults resolves a mapper installed by the application via
-`InternalSerdeMapper.install(ObjectMapper)`; if none was installed before first use, `get()` throws
-`IllegalStateException` rather than build one itself.
+SDK-internal JSON (Nexus operation tokens, local-activity marker metadata, search attribute values,
+marker scalars, tracing headers) is written and read with Jackson 3 streaming and needs no mapper or
+application context. The SDK's own `json/plain` converter handles only strings, numbers, booleans,
+`OffsetDateTime`, and collections, arrays and `Map<String, String>` of those. Passing any other
+value through a default converter throws `DataConverterException`; supply a converter built from
+your `ObjectMapper` with `WorkflowClientOptions.Builder#setDataConverter` (or
+`GlobalDataConverter.register`) for application types.
 
 **Behavior differences from the previous Jackson converter** (Serde is reflection-free / compile-time):
 

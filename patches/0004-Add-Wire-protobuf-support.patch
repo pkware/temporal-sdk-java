@@ -1,4 +1,4 @@
-From ad15e1e13d3e7d76ed73d1823e7ed19ae1533706 Mon Sep 17 00:00:00 2001
+From fd172ee58ff0a18d3d50e75215f14fe8dcc6c3f2 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Sat, 27 Jun 2026 15:10:41 -0400
 Subject: [PATCH] Add Wire protobuf support
@@ -118,7 +118,7 @@ index fdde671..86a8c67 100644
                      sign publication
                  }
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index b22d762..6789495 100644
+index edff788..bf9864e 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -1,10 +1,24 @@
@@ -147,7 +147,7 @@ index b22d762..6789495 100644
      api "io.micrometer:micrometer-core"
      api "io.nexusrpc:nexus-sdk:$nexusVersion"
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
-index dde9d83..b45822f 100644
+index 336d181..7e0c258 100644
 --- a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
 @@ -18,6 +18,7 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
@@ -155,7 +155,7 @@ index dde9d83..b45822f 100644
      new ProtobufJsonPayloadConverter(),
      new ProtobufPayloadConverter(),
 +    new WirePayloadConverter(),
-     new MicronautSerdePayloadConverter()
+     new StandardJsonPayloadConverter()
    };
  
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/WirePayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/WirePayloadConverter.java
