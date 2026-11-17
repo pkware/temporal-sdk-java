@@ -1,4 +1,4 @@
-From c3d31eb6693c97ff653930fde46f280bbaeb0aff Mon Sep 17 00:00:00 2001
+From a4347a3118b766d557e7751e72c2257aa66943a1 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Wed, 1 Jul 2026 17:25:34 -0400
 Subject: [PATCH] Add OpenTelemetry instrumentation support

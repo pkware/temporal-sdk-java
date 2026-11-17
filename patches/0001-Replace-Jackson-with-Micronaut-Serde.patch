@@ -1,4 +1,4 @@
-From 9a5635d9d87cf9d6f16e9b63466062cdf2a4b45e Mon Sep 17 00:00:00 2001
+From a2aa29dfd49e78adce28a1eb419cfaf3004fdb4e Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -138,9 +138,9 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
  temporal-test-server/build.gradle             |  15 +-
  .../testservice/TestVisibilityStoreImpl.java  |  49 ++
  .../functional/MultiOperationTest.java        |   4 +-
- .../functional/WorkflowUpdateTest.java        |   6 +-
+ .../functional/WorkflowUpdateTest.java        |   8 +-
  temporal-testing/build.gradle                 |   2 +
- 87 files changed, 3271 insertions(+), 1206 deletions(-)
+ 87 files changed, 3272 insertions(+), 1207 deletions(-)
  create mode 100644 gradle.properties
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterApiTest.java
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
@@ -6305,10 +6305,10 @@ index 6406b88..f1b73f1 100644
                                  .get())
                          .build())
 diff --git a/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java b/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java
-index decbbdc..460cc7d 100644
+index 2007491..50a9a47 100644
 --- a/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java
 +++ b/temporal-test-server/src/test/java/io/temporal/testserver/functional/WorkflowUpdateTest.java
-@@ -12,6 +12,7 @@ import io.temporal.api.workflowservice.v1.UpdateWorkflowExecutionRequest;
+@@ -13,6 +13,7 @@ import io.temporal.api.workflowservice.v1.UpdateWorkflowExecutionRequest;
  import io.temporal.api.workflowservice.v1.UpdateWorkflowExecutionResponse;
  import io.temporal.client.*;
  import io.temporal.common.converter.DefaultDataConverter;
@@ -6316,7 +6316,16 @@ index decbbdc..460cc7d 100644
  import io.temporal.testing.internal.SDKTestWorkflowRule;
  import io.temporal.testserver.functional.common.TestWorkflows;
  import io.temporal.workflow.Workflow;
-@@ -669,10 +670,7 @@ public class WorkflowUpdateTest {
+@@ -212,7 +213,7 @@ public class WorkflowUpdateTest {
+                                 Input.newBuilder()
+                                     .setName("update")
+                                     .setArgs(
+-                                        DefaultDataConverter.newDefaultInstance()
++                                        GlobalDataConverter.get()
+                                             .toPayloads(TestWorkflows.UpdateType.FINISH_WORKFLOW)
+                                             .get()))
+                             .setPropagatedNexusSerializationContext(
+@@ -715,10 +716,7 @@ public class WorkflowUpdateTest {
                              .setInput(
                                  Input.newBuilder()
                                      .setName("update")

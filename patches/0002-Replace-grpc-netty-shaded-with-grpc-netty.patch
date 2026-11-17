@@ -1,4 +1,4 @@
-From 202571766681a50ccf957043a52f4d04dc8fd1ab Mon Sep 17 00:00:00 2001
+From 9943f37843ac794fee84fa0a1cdb867f6cc2ce68 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 25 Jun 2026 12:18:14 -0400
 Subject: [PATCH] Replace grpc-netty-shaded with grpc-netty
@@ -503,7 +503,7 @@ index 12afed8..13b39fd 100644
  import io.grpc.testing.GrpcCleanupRule;
  import io.temporal.api.workflowservice.v1.GetSystemInfoRequest;
 diff --git a/temporal-test-server/src/main/resources/META-INF/native-image/io.temporal/temporal-test-server/reachability-metadata.json b/temporal-test-server/src/main/resources/META-INF/native-image/io.temporal/temporal-test-server/reachability-metadata.json
-index 5a618cf..6105ae1 100644
+index 7222e76..c2c7797 100644
 --- a/temporal-test-server/src/main/resources/META-INF/native-image/io.temporal/temporal-test-server/reachability-metadata.json
 +++ b/temporal-test-server/src/main/resources/META-INF/native-image/io.temporal/temporal-test-server/reachability-metadata.json
 @@ -285,172 +285,172 @@
