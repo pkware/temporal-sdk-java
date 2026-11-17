@@ -1,4 +1,4 @@
-From 9f8884fb190e6973d5b7f07bc94865577eefed68 Mon Sep 17 00:00:00 2001
+From 16f037a4fe03ccbf4b1614bd7ea4ced5857871cb Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -65,6 +65,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
  gradle/errorprone.gradle                      |   8 +-
  gradle/java.gradle                            |  30 +-
  gradle/linting.gradle                         |   4 +-
+ gradle/versioning.gradle                      |  32 +-
  gradle/wrapper/gradle-wrapper.properties      |   2 +-
  settings.gradle                               |  34 +-
  temporal-bom/build.gradle                     |  11 +-
@@ -129,13 +130,14 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
  .../updateTest/SpeculativeUpdateTest.java     |   2 +-
  .../testagent/TestDataConverterAgent.java     |  69 ++++
  .../WorkerWithVirtualThreadsStressTests.java  |   8 +
- temporal-serviceclient/build.gradle           |  17 +-
+ temporal-serviceclient/build.gradle           |  27 +-
+ .../temporal/serviceclient/VersionTest.java   |  27 ++
  temporal-test-server/build.gradle             |  15 +-
  .../testservice/TestVisibilityStoreImpl.java  |  49 +++
  .../functional/MultiOperationTest.java        |   4 +-
  .../functional/WorkflowUpdateTest.java        |   6 +-
  temporal-testing/build.gradle                 |   2 +
- 82 files changed, 2602 insertions(+), 1131 deletions(-)
+ 84 files changed, 2660 insertions(+), 1142 deletions(-)
  create mode 100644 gradle.properties
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
  delete mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
@@ -156,6 +158,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
  create mode 100644 temporal-sdk/src/test/java/io/temporal/internal/sync/SerializableRetryOptionsRoundTripTest.java
  create mode 100644 temporal-sdk/src/test/java/io/temporal/workflow/MultiContextProtocolJsonTest.java
  create mode 100644 temporal-sdk/src/testDataConverterAgent/java/io/temporal/testagent/TestDataConverterAgent.java
+ create mode 100644 temporal-serviceclient/src/test/java/io/temporal/serviceclient/VersionTest.java
 
 diff --git a/build.gradle b/build.gradle
 index feb5803..1ceddbc 100644
@@ -449,6 +452,61 @@ index fbc410d..6ff0feb 100644
          }
  
          kotlin {
+diff --git a/gradle/versioning.gradle b/gradle/versioning.gradle
+index 7cdddff..ea1a6c7 100644
+--- a/gradle/versioning.gradle
++++ b/gradle/versioning.gradle
+@@ -1,15 +1,22 @@
++// Nearest upstream release tag, e.g. v1.40.0. Unlike getTag, a git failure fails the build.
++ext.getUpstreamTag = { ->
++    return providers.exec {
++        workingDir rootDir
++        commandLine 'git', 'describe', '--tags', '--abbrev=0'
++    }.standardOutput.asText.get().trim()
++}
++
+ // v0.20.0-2-g000a42a -> 0.20.0-2-g000a42a
+ ext.getTag = { ->
+-    def stdout = new ByteArrayOutputStream()
+     try {
+-        exec {
++        def output = providers.exec {
++            workingDir rootDir
+             commandLine 'git', 'describe', '--tags'
+-            standardOutput = stdout
+-        }
++        }.standardOutput.asText.get()
++        return output.trim().substring(1)
+     } catch (ignored) {
+         return "unknown"
+     }
+-    return stdout.toString().trim().substring(1)
+ }
+ 
+ // Determine a version name based on git tag. It is used to name JAR files
+@@ -42,12 +49,17 @@ ext.getVersionName = { ->
+     }
+ }
+ 
+-// 0.20.0-SNAPSHOT -> 0.20.0
+-// 0.20.0 -> 0.20.0
+-// Stored int version.properties which is loaded
+-// and used as a value of temporal-client-version gRPC header.
++// v1.40.0 -> 1.40.0
++// v1.40.0-5-g8a73465 -> 1.40.0
++// Derived from the nearest upstream tag (not getVersionName, which is a SNAPSHOT of the next minor when
++// commits sit on top of the tag, and not overrideVersion). Stored in version.properties which is loaded
++// and used as a value of temporal-client-version gRPC header. Fails the build rather than storing a
++// placeholder, because the Temporal UI shows "Java unknown" for an unrecognized version.
+ ext.getClientVersionName = { ->
+-    def split = getVersionName().split('-')
++    def split = getUpstreamTag().replaceFirst(/^v/, '').split('-')
++    if (!(split[0] ==~ /\d+\.\d+\.\d+/)) {
++        throw new GradleException("Cannot derive temporal-client-version from upstream tag '${split[0]}', expected MAJOR.MINOR.PATCH")
++    }
+     return split[0]
+ }
+ 
 diff --git a/gradle/wrapper/gradle-wrapper.properties b/gradle/wrapper/gradle-wrapper.properties
 index df97d72..a351597 100644
 --- a/gradle/wrapper/gradle-wrapper.properties
@@ -5216,7 +5274,7 @@ index e50628b..522e117 100644
  
      public int ChainSequence;
 diff --git a/temporal-serviceclient/build.gradle b/temporal-serviceclient/build.gradle
-index 1da1e24..e4b6976 100644
+index 1da1e24..b462c8b 100644
 --- a/temporal-serviceclient/build.gradle
 +++ b/temporal-serviceclient/build.gradle
 @@ -1,5 +1,5 @@
@@ -5261,6 +5319,66 @@ index 1da1e24..e4b6976 100644
      }
  }
  
+@@ -129,13 +128,14 @@ idea {
+ // Generation version.properties for value to be included into the request header
+ task createProperties(dependsOn: processResources) {
+     doLast {
++        def clientVersion = getClientVersionName() // evaluated first so a failure does not leave an empty file
+         def subdir = new File("$buildDir/resources/main/io/temporal/")
+         if (!subdir.exists()) {
+             subdir.mkdirs()
+         }
+         new File("$buildDir/resources/main/io/temporal/version.properties").withWriter { w ->
+             Properties p = new Properties()
+-            p['temporal-client-version'] = getClientVersionName()
++            p['temporal-client-version'] = clientVersion
+             p.store w, null
+         }
+     }
+@@ -151,3 +151,10 @@ task registerNamespace(type: JavaExec) {
+ }
+ 
+ test.dependsOn 'registerNamespace'
++
++test {
++    // Read by io.temporal.serviceclient.VersionTest to check version.properties against the upstream tag.
++    doFirst {
++        systemProperty 'temporal.upstreamTag', getUpstreamTag()
++    }
++}
+diff --git a/temporal-serviceclient/src/test/java/io/temporal/serviceclient/VersionTest.java b/temporal-serviceclient/src/test/java/io/temporal/serviceclient/VersionTest.java
+new file mode 100644
+index 0000000..e2fae24
+--- /dev/null
++++ b/temporal-serviceclient/src/test/java/io/temporal/serviceclient/VersionTest.java
+@@ -0,0 +1,27 @@
++package io.temporal.serviceclient;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.Test;
++
++public class VersionTest {
++
++  /**
++   * The Temporal UI shows "Java unknown" when the temporal-client-version header is not a real
++   * version. The value is generated by Gradle into version.properties; it must be the upstream
++   * release the fork is based on, and never a placeholder.
++   */
++  @Test
++  public void libraryVersionIsTheUpstreamReleaseVersion() {
++    assertTrue(
++        "LIBRARY_VERSION must be MAJOR.MINOR.PATCH but was: " + Version.LIBRARY_VERSION,
++        Version.LIBRARY_VERSION != null && Version.LIBRARY_VERSION.matches("\\d+\\.\\d+\\.\\d+"));
++
++    String upstreamTag = System.getProperty("temporal.upstreamTag");
++    assertNotNull("Gradle must set the temporal.upstreamTag system property", upstreamTag);
++    String upstreamVersion = upstreamTag.split("-")[0];
++    assertEquals("v" + Version.LIBRARY_VERSION, upstreamVersion);
++  }
++}
 diff --git a/temporal-test-server/build.gradle b/temporal-test-server/build.gradle
 index dd8c97f..5adf46a 100644
 --- a/temporal-test-server/build.gradle
