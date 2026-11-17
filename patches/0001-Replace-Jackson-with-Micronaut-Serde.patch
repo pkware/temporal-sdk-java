@@ -1,4 +1,4 @@
-From 16f037a4fe03ccbf4b1614bd7ea4ced5857871cb Mon Sep 17 00:00:00 2001
+From 9a5635d9d87cf9d6f16e9b63466062cdf2a4b45e Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:36:55 -0400
 Subject: [PATCH] Replace Jackson with Micronaut Serde
@@ -68,77 +68,81 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
  gradle/versioning.gradle                      |  32 +-
  gradle/wrapper/gradle-wrapper.properties      |   2 +-
  settings.gradle                               |  34 +-
- temporal-bom/build.gradle                     |  11 +-
+ temporal-bom/build.gradle                     |  12 +-
  temporal-remote-data-encoder/build.gradle     |   2 +-
- temporal-sdk/build.gradle                     | 131 +++-----
- .../Jackson3JsonPayloadConverterTest.java     | 216 -------------
+ temporal-sdk/build.gradle                     | 132 ++---
+ .../Jackson3JsonPayloadConverterApiTest.java  |  64 --
+ .../Jackson3JsonPayloadConverterTest.java     | 216 -------
  .../common/converter/CodecDataConverter.java  |  25 +-
  .../common/converter/DataConverter.java       |   4 +-
  .../converter/DefaultDataConverter.java       |   7 +-
- .../Jackson3JsonPayloadConverter.java         |  50 ---
- .../JacksonJsonPayloadConverter.java          | 141 --------
- .../MicronautSerdePayloadConverter.java       | 113 +++++++
+ .../Jackson3JsonPayloadConverter.java         |  59 --
+ .../JacksonJsonPayloadConverter.java          | 141 -----
+ .../MicronautSerdePayloadConverter.java       | 208 +++++++
  .../PayloadAndFailureDataConverter.java       |   8 +
  .../common/converter/PayloadConverter.java    |   4 +-
- .../StandardJsonPayloadConverter.java         | 296 +++++++++++++++++
+ .../StandardJsonPayloadConverter.java         | 296 ++++++++++
  .../temporal/failure/ApplicationFailure.java  |   2 +-
  .../client/RootActivityClientInvoker.java     |   2 +-
  .../internal/common/InternalUtils.java        |   4 +-
- .../internal/common/NexusFailureInfoJson.java |  44 +++
+ .../internal/common/NexusFailureInfoJson.java |  44 ++
  .../temporal/internal/common/NexusUtil.java   |  24 +-
  .../SearchAttributePayloadConverter.java      |  32 +-
- .../internal/common/StreamingJson.java        |  77 +++++
- .../history/LocalActivityMarkerMetadata.java  |  67 +++-
+ .../internal/common/StreamingJson.java        |  77 +++
+ .../history/LocalActivityMarkerMetadata.java  |  67 ++-
  .../internal/nexus/NexusTaskHandlerImpl.java  |   2 +-
- .../internal/nexus/OperationToken.java        |  56 ++--
+ .../internal/nexus/OperationToken.java        |  56 +-
  .../internal/nexus/OperationTokenType.java    |   5 -
- .../internal/nexus/OperationTokenUtil.java    | 190 +++++++++--
+ .../internal/nexus/OperationTokenUtil.java    | 190 +++++-
  .../sync/WorkflowRetryerInternal.java         |  17 +-
  .../nexus/TemporalNexusClientImpl.java        |   6 +-
  .../temporal/payload/codec/PayloadCodec.java  |   4 +-
- .../Jackson3JsonPayloadConverter.java         | 134 --------
+ .../Jackson3JsonPayloadConverter.java         | 134 -----
  .../ActivityHeartbeatThrottlingTest.java      |  11 +-
- .../temporal/activity/ActivityInfoTest.java   | 306 ++++++++++++++----
+ .../temporal/activity/ActivityInfoTest.java   | 306 +++++++---
  .../converter/CodecDataConverterTest.java     |   4 +-
  .../common/converter/EncodedValuesTest.java   |   4 +-
- .../JacksonJsonPayloadConverterTest.java      | 158 ---------
+ .../JacksonJsonPayloadConverterTest.java      | 141 -----
  .../converter/JsonDataConverterTest.java      |   9 +-
- .../MicronautSerdePayloadConverterTest.java   |  79 +++++
- .../converter/StandardJsonGoldenTest.java     | 265 +++++++++++++++
- .../StandardJsonPayloadConverterTest.java     | 161 +++++++++
+ .../MicronautSerdePayloadConverterTest.java   | 553 ++++++++++++++++++
+ .../converter/StandardJsonGoldenTest.java     | 265 +++++++++
+ .../StandardJsonPayloadConverterTest.java     | 161 +++++
  .../OptionalJsonSerializationTest.java        |   1 +
  .../WorkflowIdSignedPayloadsTest.java         |   2 +-
- .../common/NexusFailureInfoGoldenTest.java    |  81 +++++
- .../common/SearchAttributeGoldenTest.java     |  96 ++++++
- ...alActivityMarkerMetadataRoundTripTest.java |  30 ++
- .../nexus/OperationTokenGoldenTest.java       |  68 ++++
- .../internal/nexus/OperationTokenTest.java    | 210 ++++++++++--
+ .../common/NexusFailureInfoGoldenTest.java    |  81 +++
+ .../common/SearchAttributeGoldenTest.java     |  96 +++
+ ...TemporalTransferTypeDataConverterTest.java |  19 +-
+ ...alActivityMarkerMetadataRoundTripTest.java |  30 +
+ .../nexus/OperationTokenGoldenTest.java       |  68 +++
+ .../internal/nexus/OperationTokenTest.java    | 210 ++++++-
  .../internal/nexus/PayloadSerializerTest.java |   4 +-
  .../internal/nexus/UpdateRunTokenTest.java    |  21 +-
  .../statemachines/AsyncWorkflowBuilder.java   |  14 +-
  .../VersionStateMachineTest.java              |   6 +-
- ...SerializableRetryOptionsRoundTripTest.java |  39 +++
+ ...SerializableRetryOptionsRoundTripTest.java |  39 ++
  .../ContextAwareDataConverterTest.java        |   3 +
  .../io/temporal/worker/StickyWorkerTest.java  |  11 +
  .../io/temporal/worker/WorkerStressTests.java |   8 +
- .../MultiContextProtocolJsonTest.java         |  89 +++++
+ .../MultiContextProtocolJsonTest.java         |  89 +++
+ .../LocalActivityCopyableTest.java            |  29 +-
  .../workflow/failure/FailureEncodingTest.java |   6 +-
  .../nexus/OperationFailMetricTest.java        |   2 +-
  ...utDeserializationErrorPropagationTest.java |  22 +-
  .../TerminateWorkflowAsyncOperationTest.java  |  28 +-
  .../nexus/UpdateWorkflowOperationTest.java    |  19 +-
  .../updateTest/SpeculativeUpdateTest.java     |   2 +-
- .../testagent/TestDataConverterAgent.java     |  69 ++++
+ .../testagent/TestDataConverterAgent.java     |  69 +++
  .../WorkerWithVirtualThreadsStressTests.java  |   8 +
  temporal-serviceclient/build.gradle           |  27 +-
- .../temporal/serviceclient/VersionTest.java   |  27 ++
+ .../temporal/serviceclient/VersionTest.java   |  27 +
  temporal-test-server/build.gradle             |  15 +-
- .../testservice/TestVisibilityStoreImpl.java  |  49 +++
+ .../testservice/TestVisibilityStoreImpl.java  |  49 ++
  .../functional/MultiOperationTest.java        |   4 +-
  .../functional/WorkflowUpdateTest.java        |   6 +-
  temporal-testing/build.gradle                 |   2 +
- 84 files changed, 2660 insertions(+), 1142 deletions(-)
+ 87 files changed, 3271 insertions(+), 1206 deletions(-)
  create mode 100644 gradle.properties
+ delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterApiTest.java
  delete mode 100644 temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
  delete mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
  delete mode 100644 temporal-sdk/src/main/java/io/temporal/common/converter/JacksonJsonPayloadConverter.java
@@ -355,10 +359,10 @@ index 0000000..5d24cb5
 +# the full parallel test suite OOMs otherwise.
 +org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=768m
 diff --git a/gradle/errorprone.gradle b/gradle/errorprone.gradle
-index 0334b3e..7175c0d 100644
+index 4ff1806..3672538 100644
 --- a/gradle/errorprone.gradle
 +++ b/gradle/errorprone.gradle
-@@ -12,7 +12,13 @@ subprojects {
+@@ -15,7 +15,13 @@ subprojects {
      }
  
      tasks.withType(JavaCompile).configureEach {
@@ -375,7 +379,7 @@ index 0334b3e..7175c0d 100644
 \ No newline at end of file
 +}
 diff --git a/gradle/java.gradle b/gradle/java.gradle
-index 37db264..76a6bb6 100644
+index a91b312..dc5190f 100644
 --- a/gradle/java.gradle
 +++ b/gradle/java.gradle
 @@ -4,10 +4,12 @@ subprojects {
@@ -438,7 +442,7 @@ index 37db264..76a6bb6 100644
      gradle.buildFinished {
          if (!failedTests.empty) {
 diff --git a/gradle/linting.gradle b/gradle/linting.gradle
-index fbc410d..6ff0feb 100644
+index bad14e3..86ded04 100644
 --- a/gradle/linting.gradle
 +++ b/gradle/linting.gradle
 @@ -9,7 +9,9 @@ subprojects {
@@ -453,7 +457,7 @@ index fbc410d..6ff0feb 100644
  
          kotlin {
 diff --git a/gradle/versioning.gradle b/gradle/versioning.gradle
-index 7cdddff..ea1a6c7 100644
+index e4017d5..90b1fbb 100644
 --- a/gradle/versioning.gradle
 +++ b/gradle/versioning.gradle
 @@ -1,15 +1,22 @@
@@ -484,7 +488,7 @@ index 7cdddff..ea1a6c7 100644
  }
  
  // Determine a version name based on git tag. It is used to name JAR files
-@@ -42,12 +49,17 @@ ext.getVersionName = { ->
+@@ -51,12 +58,17 @@ ext.getVersionName = { ->
      }
  }
  
@@ -520,10 +524,10 @@ index df97d72..a351597 100644
  validateDistributionUrl=true
  zipStoreBase=GRADLE_USER_HOME
 diff --git a/settings.gradle b/settings.gradle
-index 0b6bb9b..7fc01ab 100644
+index a2ee73e..31b5bb2 100644
 --- a/settings.gradle
 +++ b/settings.gradle
-@@ -4,28 +4,34 @@ include 'temporal-serviceclient'
+@@ -16,29 +16,35 @@ include 'temporal-serviceclient'
  include 'temporal-sdk'
  include 'temporal-testing'
  include 'temporal-test-server'
@@ -532,8 +536,6 @@ index 0b6bb9b..7fc01ab 100644
 -include 'temporal-opentelemetry'
 -project(':temporal-opentelemetry').projectDir = file('contrib/temporal-opentelemetry')
 -include 'temporal-kotlin'
--include 'temporal-spring-ai'
--project(':temporal-spring-ai').projectDir = file('contrib/temporal-spring-ai')
 +// Excluded: not needed by PKWARE consumers (we use OpenTelemetry)
 +// include 'temporal-opentracing'
 +// project(':temporal-opentracing').projectDir = file('contrib/temporal-opentracing')
@@ -542,6 +544,9 @@ index 0b6bb9b..7fc01ab 100644
 +// project(':temporal-opentelemetry').projectDir = file('contrib/temporal-opentelemetry')
 +// Excluded: uses Jackson's KotlinObjectMapperFactory, not needed by PKWARE consumers
 +// include 'temporal-kotlin'
+ // Retained for the one-time relocation POM; implementation lives in ai-integrations.
+-include 'temporal-spring-ai'
+-project(':temporal-spring-ai').projectDir = file('contrib/temporal-spring-ai')
 +// include 'temporal-spring-ai'
 +// project(':temporal-spring-ai').projectDir = file('contrib/temporal-spring-ai')
  include 'temporal-workflowstreams'
@@ -573,10 +578,10 @@ index 0b6bb9b..7fc01ab 100644
  include 'temporal-workflowcheck'
  include 'temporal-envconfig'
 diff --git a/temporal-bom/build.gradle b/temporal-bom/build.gradle
-index 01ddcc4..bec4780 100644
+index 0bbae3e..bec4780 100644
 --- a/temporal-bom/build.gradle
 +++ b/temporal-bom/build.gradle
-@@ -6,22 +6,13 @@ description = '''Temporal Java BOM'''
+@@ -6,23 +6,13 @@ description = '''Temporal Java BOM'''
  
  dependencies {
      constraints {
@@ -591,6 +596,7 @@ index 01ddcc4..bec4780 100644
          api project(':temporal-sdk')
          api project(':temporal-serviceclient')
 -        api project(':temporal-shaded')
+-        // Retained for the final relocation release of the old coordinate.
 -        api project(':temporal-spring-ai')
 -        api project(':temporal-spring-boot-autoconfigure')
 -        api project(':temporal-spring-boot-starter')
@@ -614,7 +620,7 @@ index f7cae3b..418936d 100644
  }
  
 diff --git a/temporal-sdk/build.gradle b/temporal-sdk/build.gradle
-index 2c0da78..edff788 100644
+index ed740af..6176b1f 100644
 --- a/temporal-sdk/build.gradle
 +++ b/temporal-sdk/build.gradle
 @@ -2,7 +2,6 @@ description = '''Temporal Workflow Java SDK'''
@@ -642,17 +648,20 @@ index 2c0da78..edff788 100644
  
      // compileOnly and testImplementation because this dependency is needed only to work with json format of history
      // which shouldn't be needed for any production usage of temporal-sdk.
-@@ -24,6 +27,9 @@ dependencies {
+@@ -24,10 +27,8 @@ dependencies {
          exclude group: 'org.slf4j', module: 'slf4j-api'
      }
  
+-    // The Java 8 stub of Jackson3JsonPayloadConverter must declare the same public API as the
+-    // Java 17 class (JEP 238), so the Jackson 3 types are needed at compile time only. The java17
+-    // source set sees them through the main compile classpath.
+-    compileOnly "tools.jackson.core:jackson-databind:$jackson3Version"
 +    testAnnotationProcessor "io.micronaut:micronaut-inject-java:$micronautVersion"
 +    testAnnotationProcessor "io.micronaut.serde:micronaut-serde-processor:$micronautSerdeVersion"
-+
+ 
      testImplementation project(':temporal-testing')
      // The optional envconfig-backed test harness is loaded only while SDK tests are running.
-     testRuntimeOnly project(':temporal-envconfig')
-@@ -40,13 +46,7 @@ dependencies {
+@@ -45,13 +46,7 @@ dependencies {
  
  // Temporal SDK supports Java 8 or later so to support virtual threads
  // we need to compile the code with Java 21 and package it in a multi-release jar.
@@ -666,7 +675,7 @@ index 2c0da78..edff788 100644
      java21 {
          java {
              srcDirs = ['src/main/java21']
-@@ -55,15 +55,6 @@ sourceSets {
+@@ -60,29 +55,37 @@ sourceSets {
  }
  
  dependencies {
@@ -677,13 +686,8 @@ index 2c0da78..edff788 100644
 -    // project's JVM compatibility (e.g. 21+ on CI edge runners).
 -    java17Implementation files(sourceSets.main.output.classesDirs) { builtBy compileJava }
 -    java17Implementation files({ sourceSets.main.compileClasspath })
--    java17CompileOnly "tools.jackson.core:jackson-databind:$jackson3Version"
 -
      java21Implementation files(sourceSets.main.output.classesDirs) { builtBy compileJava }
- }
- 
-@@ -102,18 +93,34 @@ tasks.named('compilePayloadVisitorGeneratorJava') {
-     options.errorprone.error('MissingCasesInEnumSwitch')
  }
  
 -tasks.named('compileJava17Java') {
@@ -724,7 +728,7 @@ index 2c0da78..edff788 100644
      into('META-INF/versions/21') {
          from sourceSets.java21.output
      }
-@@ -122,27 +129,6 @@ jar {
+@@ -91,27 +94,6 @@ jar {
      )
  }
  
@@ -752,14 +756,13 @@ index 2c0da78..edff788 100644
  task registerNamespace(type: JavaExec) {
      getMainClass().set('io.temporal.internal.docker.RegisterTestNamespace')
      classpath = sourceSets.test.runtimeClasspath
-@@ -236,20 +222,6 @@ task testCloud(type: Test) {
+@@ -205,19 +187,6 @@ task testCloud(type: Test) {
      }
  }
  
 -// On Java 17+, prepend java17 classes to all test classpaths so that Class.forName finds
--// the real Jackson3JsonPayloadConverter instead of the Java 8 stub. This lets us test
--// the present-java17-but-absent-jackson3 behavior (NoClassDefFoundError) in the same
--// test that tests the Java 8 stub behavior (UnsupportedOperationException).
+-// the real Jackson3JsonPayloadConverter instead of the Java 8 stub, matching what the
+-// multi-release jar resolves to at runtime.
 -tasks.withType(Test).configureEach {
 -    dependsOn compileJava17Java
 -    doFirst {
@@ -773,7 +776,7 @@ index 2c0da78..edff788 100644
  task testResourceIndependent(type: Test) {
      useJUnit {
          includeCategories 'io.temporal.worker.IndependentResourceBasedTests'
-@@ -289,14 +261,10 @@ testing {
+@@ -257,41 +226,11 @@ testing {
              }
          }
  
@@ -781,32 +784,11 @@ index 2c0da78..edff788 100644
 +        virtualThreadTests(JvmTestSuite) {
              dependencies {
 -                // java17 output must come before project() (added by configureEach) so that
--                // the compiler and runtime see the real Jackson3JsonPayloadConverter — which
--                // has a wider API than the Java 8 stub (newDefaultJsonMapper, JsonMapper
--                // constructor) because the stub can't reference Jackson 3 types.
+-                // the compiler and runtime see the real Jackson3JsonPayloadConverter rather
+-                // than the Java 8 stub, which only throws.
 -                implementation files(sourceSets.java17.output.classesDirs) { builtBy compileJava17Java }
 -                implementation "tools.jackson.core:jackson-databind:$jackson3Version"
-+                annotationProcessor "io.micronaut:micronaut-inject-java:$micronautVersion"
-+                annotationProcessor "io.micronaut.serde:micronaut-serde-processor:$micronautSerdeVersion"
-             }
-             targets {
-                 all {
-@@ -312,32 +280,6 @@ testing {
-             }
-         }
- 
--        // Unlike virtualThreadTests, jackson3Tests source directly imports Jackson 3 types
--        // and java17 classes, so the compile task also needs a Java 17+ compiler (not just
--        // the test launcher).
--        tasks.named('compileJackson3TestsJava') {
--            if (project.hasProperty("testJavaVersion")) {
--                javaCompiler = javaToolchains.compilerFor {
--                    languageVersion = JavaLanguageVersion.of(project.property("testJavaVersion") as int)
--                }
 -            }
--        }
--
--        virtualThreadTests(JvmTestSuite) {
 -            targets {
 -                all {
 -                    testTask.configure {
@@ -815,22 +797,107 @@ index 2c0da78..edff788 100644
 -                                languageVersion = JavaLanguageVersion.of(project.property("testJavaVersion") as int)
 -                            }
 -                        }
+-                        systemProperty 'temporal.sdk.mainClassesDirs', sourceSets.main.output.classesDirs.asPath
 -                        shouldRunAfter(test)
 -                    }
 -                }
 -            }
 -        }
 -
-         // Run the same test as the normal test task with virtual threads
-         testsWithVirtualThreads(JvmTestSuite) {
-             // Use the same source and resources as the main test set
-@@ -367,6 +309,5 @@ testing {
+-        // Unlike virtualThreadTests, jackson3Tests source directly imports Jackson 3 types
+-        // and java17 classes, so the compile task also needs a Java 17+ compiler (not just
+-        // the test launcher).
+-        tasks.named('compileJackson3TestsJava') {
+-            if (project.hasProperty("testJavaVersion")) {
+-                javaCompiler = javaToolchains.compilerFor {
+-                    languageVersion = JavaLanguageVersion.of(project.property("testJavaVersion") as int)
+-                }
++                annotationProcessor "io.micronaut:micronaut-inject-java:$micronautVersion"
++                annotationProcessor "io.micronaut.serde:micronaut-serde-processor:$micronautSerdeVersion"
+             }
+-        }
+-
+-        virtualThreadTests(JvmTestSuite) {
+             targets {
+                 all {
+                     testTask.configure {
+@@ -335,6 +274,5 @@ testing {
  }
  
  tasks.named('check') {
 -    dependsOn(testing.suites.jackson3Tests)
      dependsOn(testing.suites.virtualThreadTests)
  }
+diff --git a/temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterApiTest.java b/temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterApiTest.java
+deleted file mode 100644
+index b3587f3..0000000
+--- a/temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterApiTest.java
++++ /dev/null
+@@ -1,64 +0,0 @@
+-package io.temporal.common.converter;
+-
+-import static org.junit.Assert.assertEquals;
+-
+-import java.io.File;
+-import java.io.IOException;
+-import java.lang.reflect.Constructor;
+-import java.lang.reflect.Method;
+-import java.lang.reflect.Modifier;
+-import java.nio.file.Files;
+-import java.util.Set;
+-import java.util.TreeSet;
+-import org.junit.Test;
+-
+-/**
+- * Verifies that the Java 8 stub of {@link Jackson3JsonPayloadConverter} declares the same public
+- * API as the Java 17 class, as required for versioned entries of a multi-release jar. Tools that
+- * compile against the base entry otherwise cannot resolve members that exist only in the Java 17
+- * class.
+- */
+-public class Jackson3JsonPayloadConverterApiTest {
+-
+-  private static final String CLASS_FILE =
+-      Jackson3JsonPayloadConverter.class.getName().replace('.', '/') + ".class";
+-
+-  @Test
+-  public void testStubDeclaresTheSamePublicApi() throws Exception {
+-    byte[] stub = readStub();
+-    Class<?> stubClass =
+-        new ClassLoader(getClass().getClassLoader()) {
+-          Class<?> define() {
+-            return defineClass(null, stub, 0, stub.length);
+-          }
+-        }.define();
+-
+-    assertEquals(publicApi(Jackson3JsonPayloadConverter.class), publicApi(stubClass));
+-  }
+-
+-  private static byte[] readStub() throws IOException {
+-    String dirs = System.getProperty("temporal.sdk.mainClassesDirs");
+-    for (String dir : dirs.split(File.pathSeparator, -1)) {
+-      File classFile = new File(dir, CLASS_FILE);
+-      if (classFile.isFile()) {
+-        return Files.readAllBytes(classFile.toPath());
+-      }
+-    }
+-    throw new AssertionError("stub not found in " + dirs);
+-  }
+-
+-  private static Set<String> publicApi(Class<?> clazz) {
+-    Set<String> api = new TreeSet<>();
+-    for (Constructor<?> constructor : clazz.getDeclaredConstructors()) {
+-      if (Modifier.isPublic(constructor.getModifiers())) {
+-        api.add(constructor.toGenericString());
+-      }
+-    }
+-    for (Method method : clazz.getDeclaredMethods()) {
+-      if (Modifier.isPublic(method.getModifiers()) && !method.isSynthetic()) {
+-        api.add(method.toGenericString());
+-      }
+-    }
+-    return api;
+-  }
+-}
 diff --git a/temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java b/temporal-sdk/src/jackson3Tests/java/io/temporal/common/converter/Jackson3JsonPayloadConverterTest.java
 deleted file mode 100644
 index 5d2485a..0000000
@@ -1054,7 +1121,7 @@ index 5d2485a..0000000
 -  }
 -}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/CodecDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/CodecDataConverter.java
-index a821723..c5b6b94 100644
+index af6aaff..a19895c 100644
 --- a/temporal-sdk/src/main/java/io/temporal/common/converter/CodecDataConverter.java
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/CodecDataConverter.java
 @@ -2,6 +2,7 @@ package io.temporal.common.converter;
@@ -1065,7 +1132,7 @@ index a821723..c5b6b94 100644
  import io.temporal.api.common.v1.Payload;
  import io.temporal.api.common.v1.Payloads;
  import io.temporal.api.failure.v1.ApplicationFailureInfo;
-@@ -210,7 +211,11 @@ public class CodecDataConverter implements DataConverter, PayloadCodec {
+@@ -220,7 +221,11 @@ public class CodecDataConverter implements DataConverter, PayloadCodecProvider,
        EncodedAttributes encodedAttributes = new EncodedAttributes();
        encodedAttributes.setStackTrace(failure.getStackTrace());
        encodedAttributes.setMessage(failure.getMessage());
@@ -1078,7 +1145,7 @@ index a821723..c5b6b94 100644
        failure
            .setEncodedAttributes(encodedAttributesPayload)
            .setMessage(ENCODED_FAILURE_MESSAGE)
-@@ -269,9 +274,11 @@ public class CodecDataConverter implements DataConverter, PayloadCodec {
+@@ -279,9 +284,11 @@ public class CodecDataConverter implements DataConverter, PayloadCodecProvider,
        EncodedAttributes encodedAttributes =
            fromPayload(
                failure.getEncodedAttributes(), EncodedAttributes.class, EncodedAttributes.class);
@@ -1092,7 +1159,7 @@ index a821723..c5b6b94 100644
            .clearEncodedAttributes();
      }
      switch (failure.getFailureInfoCase()) {
-@@ -327,10 +334,16 @@ public class CodecDataConverter implements DataConverter, PayloadCodec {
+@@ -337,10 +344,16 @@ public class CodecDataConverter implements DataConverter, PayloadCodecProvider,
      return Payloads.newBuilder().addAllPayloads(decode(encodedPayloads.getPayloadsList())).build();
    }
  
@@ -1111,7 +1178,7 @@ index a821723..c5b6b94 100644
  
      public String getMessage() {
        return message;
-@@ -340,12 +353,10 @@ public class CodecDataConverter implements DataConverter, PayloadCodec {
+@@ -350,12 +363,10 @@ public class CodecDataConverter implements DataConverter, PayloadCodecProvider,
        this.message = message;
      }
  
@@ -1146,10 +1213,10 @@ index decf618..99969b0 100644
     * @param context provides information to the data converter about the abstraction the data
     *     belongs to
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
-index f05c3f9..336d181 100644
+index 685f369..6ca21e2 100644
 --- a/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/DefaultDataConverter.java
-@@ -18,7 +18,7 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
+@@ -24,7 +24,7 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
      new ByteArrayPayloadConverter(),
      new ProtobufJsonPayloadConverter(),
      new ProtobufPayloadConverter(),
@@ -1158,7 +1225,7 @@ index f05c3f9..336d181 100644
    };
  
    /**
-@@ -35,6 +35,11 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
+@@ -41,6 +41,11 @@ public class DefaultDataConverter extends PayloadAndFailureDataConverter {
     *   <li>Search attribute values
     *   <li>Stacktrace query return value
     * </ul>
@@ -1172,16 +1239,17 @@ index f05c3f9..336d181 100644
  
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
 deleted file mode 100644
-index cd40953..0000000
+index bfea494..0000000
 --- a/temporal-sdk/src/main/java/io/temporal/common/converter/Jackson3JsonPayloadConverter.java
 +++ /dev/null
-@@ -1,50 +0,0 @@
+@@ -1,59 +0,0 @@
 -package io.temporal.common.converter;
 -
 -import io.temporal.api.common.v1.Payload;
 -import io.temporal.common.Experimental;
 -import java.lang.reflect.Type;
 -import java.util.Optional;
+-import tools.jackson.databind.json.JsonMapper;
 -
 -/**
 - * A {@link PayloadConverter} that uses Jackson 3.x for JSON serialization/deserialization. This
@@ -1207,6 +1275,14 @@ index cd40953..0000000
 -  }
 -
 -  public Jackson3JsonPayloadConverter(boolean jackson2Compat) {
+-    throw new UnsupportedOperationException(UNSUPPORTED_MSG);
+-  }
+-
+-  public Jackson3JsonPayloadConverter(JsonMapper mapper) {
+-    throw new UnsupportedOperationException(UNSUPPORTED_MSG);
+-  }
+-
+-  public static JsonMapper newDefaultJsonMapper(boolean jackson2Compat) {
 -    throw new UnsupportedOperationException(UNSUPPORTED_MSG);
 -  }
 -
@@ -1375,10 +1451,10 @@ index 7022d71..0000000
 -}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java
 new file mode 100644
-index 0000000..76a9e19
+index 0000000..5e3bb56
 --- /dev/null
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/MicronautSerdePayloadConverter.java
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,208 @@
 +package io.temporal.common.converter;
 +
 +import com.google.protobuf.ByteString;
@@ -1386,7 +1462,12 @@ index 0000000..76a9e19
 +import io.micronaut.serde.ObjectMapper;
 +import io.temporal.api.common.v1.Payload;
 +import java.io.IOException;
++import java.io.Serializable;
++import java.lang.reflect.GenericArrayType;
++import java.lang.reflect.ParameterizedType;
 +import java.lang.reflect.Type;
++import java.lang.reflect.TypeVariable;
++import java.lang.reflect.WildcardType;
 +import java.nio.charset.StandardCharsets;
 +import java.util.Collection;
 +import java.util.Map;
@@ -1457,14 +1538,104 @@ index 0000000..76a9e19
 +      throw new DataConverterException("Empty payload data for type " + valueType);
 +    }
 +    try {
-+      Argument<Object> argument = rawCollectionSafe((Argument<Object>) Argument.of(valueType));
++      Argument<Object> argument = rawCollectionSafe((Argument<Object>) toArgument(valueType, null));
 +      // A JSON "null" payload is a valid encoding of a null value (e.g. an absent Optional, or a
 +      // null search-attribute value). Return it as-is; do NOT treat null as an error, matching the
 +      // removed Moshi/Jackson behavior. Empty payload data is rejected above.
 +      return (T) objectMapper.readValue(data.toByteArray(), argument);
-+    } catch (IOException e) {
++    } catch (IOException | IllegalArgumentException e) {
 +      throw new DataConverterException(e);
 +    }
++  }
++
++  /**
++   * Builds the {@link Argument} for a requested type so that Micronaut Serde resolves the same
++   * generic arguments as Jackson does.
++   *
++   * <p>Serde binds the type arguments of a generic POJO to its fields by type-variable name ({@code
++   * T} in {@code Box<T>}), but {@code Argument.of(Type)} names each type argument after its own
++   * class, so {@code Box<Long>.value} would not resolve to {@code Long}. Every type argument is
++   * therefore rebuilt with the name of the corresponding type variable of the raw class. The first
++   * matching rule applies, at every depth of the requested type:
++   *
++   * <ol>
++   *   <li>A generic array type is rejected with {@link DataConverterException}; {@link Argument}
++   *       has no form for it.
++   *   <li>A wildcard resolves to its upper bound.
++   *   <li>A type variable resolves to the erasure of its first bound.
++   *   <li>{@code Object} and {@code Serializable} resolve to {@code Object}, which Serde reads as
++   *       the natural JSON value ({@code Integer}, {@code String}, {@code List}, {@code Map}).
++   *       Other interfaces such as {@code Comparable} and {@code Number} are not treated this way.
++   *   <li>A raw generic class, such as {@code List}, {@code Map} or {@code Box}, gets {@code
++   *       Object} for each of its type variables, which is how Jackson reads it.
++   *   <li>Any other class is used as is.
++   *   <li>A parameterized type is rebuilt from its raw class with each actual type argument
++   *       resolved by these rules.
++   *   <li>Anything else falls back to {@code Argument.of(Type)}.
++   * </ol>
++   */
++  private static Argument<?> toArgument(Type type, String name) {
++    if (type instanceof GenericArrayType) {
++      throw new DataConverterException(
++          "Generic array type is not supported: " + type.getTypeName());
++    }
++    if (type instanceof WildcardType) {
++      return toArgument(((WildcardType) type).getUpperBounds()[0], name);
++    }
++    if (type instanceof TypeVariable<?>) {
++      return toArgument(erasure(((TypeVariable<?>) type).getBounds()[0]), name);
++    }
++    if (type == Object.class || type == Serializable.class) {
++      return named(Object.class, name);
++    }
++    if (type instanceof Class<?>) {
++      Class<?> clazz = (Class<?>) type;
++      TypeVariable<?>[] variables = clazz.getTypeParameters();
++      if (variables.length == 0) {
++        return named(clazz, name);
++      }
++      Argument<?>[] typeArguments = new Argument<?>[variables.length];
++      for (int i = 0; i < variables.length; i++) {
++        typeArguments[i] = Argument.of(Object.class, variables[i].getName());
++      }
++      return named(clazz, name, typeArguments);
++    }
++    if (type instanceof ParameterizedType) {
++      ParameterizedType parameterized = (ParameterizedType) type;
++      if (parameterized.getRawType() instanceof Class<?>) {
++        Class<?> raw = (Class<?>) parameterized.getRawType();
++        Type[] actual = parameterized.getActualTypeArguments();
++        TypeVariable<?>[] variables = raw.getTypeParameters();
++        if (actual.length == variables.length) {
++          Argument<?>[] typeArguments = new Argument<?>[actual.length];
++          for (int i = 0; i < actual.length; i++) {
++            typeArguments[i] = toArgument(actual[i], variables[i].getName());
++          }
++          return named(raw, name, typeArguments);
++        }
++      }
++    }
++    return Argument.of(type);
++  }
++
++  private static Argument<?> named(Class<?> clazz, String name, Argument<?>... typeArguments) {
++    return name == null
++        ? Argument.of(clazz, typeArguments)
++        : Argument.of(clazz, name, typeArguments);
++  }
++
++  /** Returns the raw class a bound erases to, which also terminates self-referencing bounds. */
++  private static Class<?> erasure(Type bound) {
++    if (bound instanceof Class<?>) {
++      return (Class<?>) bound;
++    }
++    if (bound instanceof ParameterizedType) {
++      return erasure(((ParameterizedType) bound).getRawType());
++    }
++    if (bound instanceof TypeVariable<?>) {
++      return erasure(((TypeVariable<?>) bound).getBounds()[0]);
++    }
++    return Object.class;
 +  }
 +
 +  /**
@@ -1493,10 +1664,10 @@ index 0000000..76a9e19
 +  }
 +}
 diff --git a/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java b/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java
-index 935fd84..f503a44 100644
+index e29c2c3..f814e4c 100644
 --- a/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java
 +++ b/temporal-sdk/src/main/java/io/temporal/common/converter/PayloadAndFailureDataConverter.java
-@@ -71,6 +71,14 @@ class PayloadAndFailureDataConverter implements DataConverter {
+@@ -72,6 +72,14 @@ class PayloadAndFailureDataConverter implements DataConverter {
        return (T) new RawValue(payload);
      }
  
@@ -1848,13 +2019,13 @@ index 91d496b..7365e79 100644
            nextRetryDelay,
            category == null ? ApplicationErrorCategory.UNSPECIFIED : category);
 diff --git a/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java b/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
-index 5529719..c0625ce 100644
+index 7bc3cef..7d98a6b 100644
 --- a/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
 +++ b/temporal-sdk/src/main/java/io/temporal/internal/client/RootActivityClientInvoker.java
-@@ -168,7 +168,7 @@ public class RootActivityClientInvoker implements ActivityClientCallsInterceptor
+@@ -213,7 +213,7 @@ public class RootActivityClientInvoker implements ActivityClientCallsInterceptor
          nexusOperationMetadata.operationToken =
              io.temporal.internal.nexus.OperationTokenUtil.generateActivityExecutionOperationToken(
-                 options.getId(), clientOptions.getNamespace());
+                 options.getId(), namespace);
 -      } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
 +      } catch (java.io.IOException e) {
          throw new io.nexusrpc.handler.HandlerException(
@@ -2659,7 +2830,7 @@ index ecf31fd..dd92af0 100644
        this.backoffCoefficient = backoffCoefficient;
        this.maximumAttempts = maximumAttempts;
 diff --git a/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java b/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java
-index d962d38..6fd5af4 100644
+index 22c7eaf..897d098 100644
 --- a/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java
 +++ b/temporal-sdk/src/main/java/io/temporal/nexus/TemporalNexusClientImpl.java
 @@ -1,6 +1,5 @@
@@ -2669,7 +2840,7 @@ index d962d38..6fd5af4 100644
  import com.google.common.base.Strings;
  import io.nexusrpc.OperationException;
  import io.nexusrpc.handler.HandlerException;
-@@ -36,6 +35,7 @@ import io.temporal.internal.nexus.OperationToken;
+@@ -34,6 +33,7 @@ import io.temporal.internal.nexus.OperationToken;
  import io.temporal.internal.nexus.OperationTokenUtil;
  import io.temporal.internal.util.MethodExtractor;
  import io.temporal.workflow.Functions;
@@ -2677,7 +2848,7 @@ index d962d38..6fd5af4 100644
  import java.lang.reflect.Method;
  import java.lang.reflect.Type;
  import java.util.Arrays;
-@@ -593,7 +593,7 @@ final class TemporalNexusClientImpl implements TemporalNexusClient {
+@@ -589,7 +589,7 @@ final class TemporalNexusClientImpl implements TemporalNexusClient {
                  ot.getWorkflowId(),
                  handle.getExecution().getRunId(),
                  ot.getUpdateId());
@@ -2686,7 +2857,7 @@ index d962d38..6fd5af4 100644
          // should not happen, this is all in SDK
          throw new HandlerException(
              HandlerException.ErrorType.INTERNAL, "unexpected error reconstructing token", e);
-@@ -1148,7 +1148,7 @@ final class TemporalNexusClientImpl implements TemporalNexusClient {
+@@ -1145,7 +1145,7 @@ final class TemporalNexusClientImpl implements TemporalNexusClient {
                            out.getActivityId(),
                            out.getActivityRunId(),
                            client.getOptions().getNamespace());
@@ -3240,10 +3411,10 @@ index ab2f878..0362885 100644
        }
        return serialized;
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java
-index f3957ad..adaf392 100644
+index 6b512f0..3883181 100644
 --- a/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/common/converter/CodecDataConverterTest.java
-@@ -32,9 +32,7 @@ public class CodecDataConverterTest {
+@@ -33,9 +33,7 @@ public class CodecDataConverterTest {
      PrefixPayloadCodec prefixPayloadCodec = new PrefixPayloadCodec();
      this.dataConverter =
          new CodecDataConverter(
@@ -3285,10 +3456,10 @@ index 0095787..104560e 100644
    }
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java
 deleted file mode 100644
-index 5154bdc..0000000
+index 6950677..0000000
 --- a/temporal-sdk/src/test/java/io/temporal/common/converter/JacksonJsonPayloadConverterTest.java
 +++ /dev/null
-@@ -1,158 +0,0 @@
+@@ -1,141 +0,0 @@
 -package io.temporal.common.converter;
 -
 -import static org.junit.Assert.assertEquals;
@@ -3296,7 +3467,6 @@ index 5154bdc..0000000
 -import static org.junit.Assert.fail;
 -
 -import io.temporal.api.common.v1.Payloads;
--import java.lang.reflect.InvocationTargetException;
 -import java.time.Instant;
 -import java.util.Objects;
 -import java.util.Optional;
@@ -3316,27 +3486,11 @@ index 5154bdc..0000000
 -      JacksonJsonPayloadConverter.setDefaultAsJackson3(true, true);
 -      fail("Expected IllegalStateException");
 -    } catch (IllegalStateException e) {
--      // On Java 8: Class.forName finds the stub, whose constructor throws
--      //   UnsupportedOperationException → wrapped in InvocationTargetException by reflection.
--      // On Java 17+: Class.forName finds the real impl (java17 classes are on the classpath)
--      //   but Jackson 3 types are absent, so class loading throws NoClassDefFoundError directly.
+-      // Both the Java 8 stub and the Java 17 class reference Jackson 3 types, so reflective
+-      // constructor lookup fails while linking when Jackson 3 is absent.
 -      Throwable cause = e.getCause();
--      String specVersion = System.getProperty("java.specification.version");
--      int majorVersion =
--          specVersion.startsWith("1.")
--              ? Integer.parseInt(specVersion.substring(2))
--              : Integer.parseInt(specVersion);
--      if (majorVersion >= 17) {
--        assertTrue(
--            "Expected NoClassDefFoundError, got: " + cause, cause instanceof NoClassDefFoundError);
--      } else {
--        assertTrue(
--            "Expected InvocationTargetException, got: " + cause,
--            cause instanceof InvocationTargetException);
--        assertTrue(
--            "Expected UnsupportedOperationException, got: " + cause.getCause(),
--            cause.getCause() instanceof UnsupportedOperationException);
--      }
+-      assertTrue(
+-          "Expected NoClassDefFoundError, got: " + cause, cause instanceof NoClassDefFoundError);
 -    }
 -  }
 -
@@ -3489,78 +3643,552 @@ index 1f1d18d..0a192a4 100644
      }
 diff --git a/temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java b/temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java
 new file mode 100644
-index 0000000..2fa92bd
+index 0000000..40dc854
 --- /dev/null
 +++ b/temporal-sdk/src/test/java/io/temporal/common/converter/MicronautSerdePayloadConverterTest.java
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,553 @@
 +package io.temporal.common.converter;
 +
 +import com.google.protobuf.ByteString;
++import io.micronaut.core.annotation.Introspected;
 +import io.micronaut.serde.ObjectMapper;
 +import io.micronaut.serde.annotation.Serdeable;
 +import io.temporal.api.common.v1.Payload;
++import java.io.Serializable;
++import java.lang.reflect.Array;
++import java.lang.reflect.Field;
++import java.lang.reflect.GenericArrayType;
++import java.lang.reflect.Modifier;
++import java.lang.reflect.ParameterizedType;
++import java.lang.reflect.RecordComponent;
++import java.lang.reflect.Type;
 +import java.nio.charset.StandardCharsets;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
 +import java.util.Optional;
++import java.util.Set;
 +import org.junit.Assert;
 +import org.junit.Test;
++import org.junit.experimental.runners.Enclosed;
++import org.junit.runner.RunWith;
 +
++/**
++ * The generic-type cases assert the result Jackson 2.15.4 produces through {@code
++ * JacksonJsonPayloadConverter} for the same payload and requested type: the same runtime class and
++ * equal value at every level, or a {@link DataConverterException}. The expected values were
++ * recorded from an actual Jackson run; where a case differs from Jackson the test says so.
++ */
++@RunWith(Enclosed.class)
 +public class MicronautSerdePayloadConverterTest {
 +
 +  @Serdeable
-+  public record TestChunk(String chunkId, boolean success, int rows) {}
++  record TestChunk(String chunkId, boolean success, int rows) {}
 +
-+  private final ObjectMapper mapper = ObjectMapper.getDefault();
-+  private final MicronautSerdePayloadConverter converter =
-+      new MicronautSerdePayloadConverter(mapper);
-+
-+  @Test
-+  public void serializes_a_record_to_json_payload() {
-+    Optional<Payload> result = converter.toData(new TestChunk("c1", true, 42));
-+    Assert.assertTrue(result.isPresent());
-+    String json = result.get().getData().toStringUtf8();
-+    Assert.assertTrue(json, json.contains("\"chunkId\":\"c1\""));
-+    Assert.assertTrue(json, json.contains("\"rows\":42"));
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
++  static class Box<T> {
++    public T value;
 +  }
 +
-+  @Test
-+  public void returns_empty_for_null() {
-+    Assert.assertFalse(converter.toData(null).isPresent());
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
++  static class Pair<A, B> {
++    public A first;
++    public B second;
 +  }
 +
-+  @Test
-+  public void sets_json_plain_encoding_metadata() {
-+    Payload p = converter.toData(new TestChunk("c1", false, 0)).get();
-+    String enc = p.getMetadataMap().get(EncodingKeys.METADATA_ENCODING_KEY).toStringUtf8();
-+    Assert.assertEquals("json/plain", enc);
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
++  static class Page<T> {
++    public List<T> items;
 +  }
 +
-+  @Test
-+  public void deserializes_json_to_record() {
-+    Payload p = jsonPayload("{\"chunkId\":\"c1\",\"success\":true,\"rows\":7}");
-+    TestChunk r = converter.fromData(p, TestChunk.class, TestChunk.class);
-+    Assert.assertEquals("c1", r.chunkId());
-+    Assert.assertEquals(7, r.rows());
++  @Serdeable
++  record RBox<T>(T value) {}
++
++  private abstract static class TypeRef<T> {
++    Type type() {
++      return ((ParameterizedType) getClass().getGenericSuperclass()).getActualTypeArguments()[0];
++    }
 +  }
 +
-+  @Test
-+  public void empty_payload_throws() {
++  private static final MicronautSerdePayloadConverter CONVERTER =
++      new MicronautSerdePayloadConverter(
++          ObjectMapper.create(Map.of(), "io.temporal.common.converter"));
++
++  public static class Basics {
++    private final MicronautSerdePayloadConverter converter = CONVERTER;
++
++    @Test
++    public void serializes_a_record_to_json_payload() {
++      Optional<Payload> result = converter.toData(new TestChunk("c1", true, 42));
++      Assert.assertTrue(result.isPresent());
++      String json = result.get().getData().toStringUtf8();
++      Assert.assertTrue(json, json.contains("\"chunkId\":\"c1\""));
++      Assert.assertTrue(json, json.contains("\"rows\":42"));
++    }
++
++    @Test
++    public void returns_empty_for_null() {
++      Assert.assertFalse(converter.toData(null).isPresent());
++    }
++
++    @Test
++    public void sets_json_plain_encoding_metadata() {
++      Payload p = converter.toData(new TestChunk("c1", false, 0)).get();
++      String enc = p.getMetadataMap().get(EncodingKeys.METADATA_ENCODING_KEY).toStringUtf8();
++      Assert.assertEquals("json/plain", enc);
++    }
++
++    @Test
++    public void deserializes_json_to_record() {
++      Payload p = jsonPayload("{\"chunkId\":\"c1\",\"success\":true,\"rows\":7}");
++      TestChunk r = converter.fromData(p, TestChunk.class, TestChunk.class);
++      Assert.assertEquals("c1", r.chunkId());
++      Assert.assertEquals(7, r.rows());
++    }
++
++    @Test
++    public void empty_payload_throws() {
++      Assert.assertThrows(
++          DataConverterException.class,
++          () -> converter.fromData(jsonPayload(""), TestChunk.class, TestChunk.class));
++    }
++
++    @Test
++    public void malformed_json_throws() {
++      Assert.assertThrows(
++          DataConverterException.class,
++          () -> converter.fromData(jsonPayload("{not json"), TestChunk.class, TestChunk.class));
++    }
++
++    @Test
++    public void round_trips() {
++      TestChunk original = new TestChunk("c1", true, 1000);
++      Payload p = converter.toData(original).get();
++      Assert.assertEquals(original, converter.fromData(p, TestChunk.class, TestChunk.class));
++    }
++
++    @Test
++    public void generic_pojo_honors_type_argument() {
++      Type type = new TypeRef<Box<Long>>() {}.type();
++      Box<Long> box = converter.fromData(jsonPayload("{\"value\":1}"), Box.class, type);
++      Object value = box.value;
++      Assert.assertEquals(Long.class, value.getClass());
++      Assert.assertEquals(1L, value);
++    }
++
++    @Test
++    public void generic_pojo_honors_each_type_argument_by_position() {
++      Type type = new TypeRef<Pair<String, Long>>() {}.type();
++      Pair<String, Long> pair =
++          converter.fromData(jsonPayload("{\"first\":\"a\",\"second\":2}"), Pair.class, type);
++      Object second = pair.second;
++      Assert.assertEquals("a", pair.first);
++      Assert.assertEquals(Long.class, second.getClass());
++    }
++
++    @Test
++    public void nested_generic_pojo_in_list_honors_type_argument() {
++      Type type = new TypeRef<List<Box<Long>>>() {}.type();
++      List<Box<Long>> list =
++          converter.fromData(jsonPayload("[{\"value\":1},{\"value\":2}]"), List.class, type);
++      Assert.assertEquals(2, list.size());
++      for (Box<Long> box : list) {
++        Object value = box.value;
++        Assert.assertEquals(Long.class, value.getClass());
++      }
++    }
++
++    @Test
++    public void generic_pojo_nested_in_generic_pojo_honors_type_argument() {
++      Type type = new TypeRef<Box<Box<Long>>>() {}.type();
++      Box<Box<Long>> outer =
++          converter.fromData(jsonPayload("{\"value\":{\"value\":1}}"), Box.class, type);
++      Object inner = outer.value.value;
++      Assert.assertEquals(Long.class, inner.getClass());
++    }
++
++    @SuppressWarnings("rawtypes")
++    @Test
++    public void generic_pojo_with_raw_list_argument_deserializes_to_list() {
++      Type type = new TypeRef<Box<List>>() {}.type();
++      Box<List> box = converter.fromData(jsonPayload("{\"value\":[1]}"), Box.class, type);
++      Assert.assertEquals(List.of(1), box.value);
++    }
++
++    @SuppressWarnings("rawtypes")
++    @Test
++    public void generic_pojo_with_raw_map_argument_deserializes_to_map() {
++      Type type = new TypeRef<Box<Map>>() {}.type();
++      Box<Map> box = converter.fromData(jsonPayload("{\"value\":{\"a\":1}}"), Box.class, type);
++      Assert.assertEquals(Map.of("a", 1), box.value);
++    }
++  }
++
++  @SuppressWarnings("rawtypes")
++  public static class GenericPojos {
++    @Test
++    public void box_of_long() {
++      Type type = new TypeRef<Box<Long>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Box{value=Long:1}");
++    }
++
++    @Test
++    public void list_of_box_of_long() {
++      Type type = new TypeRef<List<Box<Long>>>() {}.type();
++      assertReads(type, "[{\"value\":1}]", "ArrayList[Box{value=Long:1}]");
++    }
++
++    @Test
++    public void map_of_box_of_long() {
++      Type type = new TypeRef<Map<String, Box<Long>>>() {}.type();
++      assertReads(type, "{\"a\":{\"value\":1}}", "LinkedHashMap{a=Box{value=Long:1}}");
++    }
++
++    @Test
++    public void optional_of_box_of_long() {
++      Type type = new TypeRef<Optional<Box<Long>>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Optional[Box{value=Long:1}]");
++    }
++
++    @Test
++    public void box_of_box_of_long() {
++      Type type = new TypeRef<Box<Box<Long>>>() {}.type();
++      assertReads(type, "{\"value\":{\"value\":1}}", "Box{value=Box{value=Long:1}}");
++    }
++
++    @Test
++    public void box_of_list_of_long() {
++      Type type = new TypeRef<Box<List<Long>>>() {}.type();
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Long:1]}");
++    }
++
++    @Test
++    public void pair_of_string_and_long() {
++      Type type = new TypeRef<Pair<String, Long>>() {}.type();
++      assertReads(type, "{\"first\":\"a\",\"second\":1}", "Pair{first=String:\"a\",second=Long:1}");
++    }
++
++    @Test
++    public void box_of_optional_of_long() {
++      Type type = new TypeRef<Box<Optional<Long>>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Box{value=Optional[Long:1]}");
++    }
++
++    @Test
++    public void page_of_long() {
++      Type type = new TypeRef<Page<Long>>() {}.type();
++      assertReads(type, "{\"items\":[1,2]}", "Page{items=ArrayList[Long:1,Long:2]}");
++    }
++
++    @Test
++    public void record_box_of_long() {
++      Type type = new TypeRef<RBox<Long>>() {}.type();
++      assertReads(type, "{\"value\":1}", "RBox{value=Long:1}");
++    }
++  }
++
++  @SuppressWarnings("rawtypes")
++  public static class RawContainerArguments {
++    @Test
++    public void box_of_raw_list() {
++      Type type = new TypeRef<Box<List>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_raw_map() {
++      Type type = new TypeRef<Box<Map>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertRejected(type, "{\"value\":[1]}");
++      assertReads(type, "{\"value\":{\"a\":1}}", "Box{value=LinkedHashMap{a=Integer:1}}");
++    }
++
++    @Test
++    public void box_of_raw_set() {
++      Type type = new TypeRef<Box<Set>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      // Jackson returns HashSet here; LinkedHashSet is an accepted divergence.
++      assertReads(type, "{\"value\":[1]}", "Box{value=LinkedHashSet[Integer:1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_raw_array_list() {
++      Type type = new TypeRef<Box<ArrayList>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_raw_iterable() {
++      Type type = new TypeRef<Box<Iterable>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_iterable_of_integer() {
++      Type type = new TypeRef<Box<Iterable<Integer>>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void map_of_string_to_raw_list() {
++      Type type = new TypeRef<Map<String, List>>() {}.type();
++      assertRejected(type, "{\"a\":1}");
++      assertRejected(type, "{\"a\":\"s\"}");
++      assertReads(type, "{\"a\":[1]}", "LinkedHashMap{a=ArrayList[Integer:1]}");
++      assertRejected(type, "{\"a\":{\"a\":1}}");
++    }
++
++    @Test
++    public void optional_of_raw_list() {
++      Type type = new TypeRef<Optional<List>>() {}.type();
++      assertRejected(type, "1");
++      assertRejected(type, "\"s\"");
++      assertReads(type, "[1]", "Optional[ArrayList[Integer:1]]");
++      assertRejected(type, "{\"a\":1}");
++    }
++
++    @Test
++    public void top_level_raw_list() {
++      Type type = List.class;
++      assertRejected(type, "1");
++      assertRejected(type, "\"s\"");
++      assertReads(type, "[1]", "ArrayList[Integer:1]");
++      assertRejected(type, "{\"a\":1}");
++    }
++
++    @Test
++    public void top_level_raw_map() {
++      Type type = Map.class;
++      assertRejected(type, "1");
++      assertRejected(type, "\"s\"");
++      assertRejected(type, "[1]");
++      assertReads(type, "{\"a\":1}", "LinkedHashMap{a=Integer:1}");
++    }
++  }
++
++  @SuppressWarnings("rawtypes")
++  public static class ObjectLikeArguments {
++    @Test
++    public void box_of_serializable() {
++      Type type = new TypeRef<Box<Serializable>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Box{value=Integer:1}");
++      assertReads(type, "{\"value\":\"s\"}", "Box{value=String:\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertReads(type, "{\"value\":{\"a\":1}}", "Box{value=LinkedHashMap{a=Integer:1}}");
++    }
++
++    @Test
++    public void box_of_raw_comparable() {
++      Type type = new TypeRef<Box<Comparable>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertRejected(type, "{\"value\":[1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_comparable_of_long() {
++      Type type = new TypeRef<Box<Comparable<Long>>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertRejected(type, "{\"value\":[1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_comparable_of_wildcard() {
++      Type type = new TypeRef<Box<Comparable<?>>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertRejected(type, "{\"value\":[1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void pair_of_long_and_serializable() {
++      Type type = new TypeRef<Pair<Long, Serializable>>() {}.type();
++      assertReads(type, "{\"first\":1,\"second\":1}", "Pair{first=Long:1,second=Integer:1}");
++      assertReads(type, "{\"first\":1,\"second\":\"s\"}", "Pair{first=Long:1,second=String:\"s\"}");
++      assertReads(
++          type, "{\"first\":1,\"second\":[1]}", "Pair{first=Long:1,second=ArrayList[Integer:1]}");
++      assertReads(
++          type,
++          "{\"first\":1,\"second\":{\"a\":1}}",
++          "Pair{first=Long:1,second=LinkedHashMap{a=Integer:1}}");
++    }
++
++    @Test
++    public void box_of_object() {
++      Type type = new TypeRef<Box<Object>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Box{value=Integer:1}");
++      assertReads(type, "{\"value\":\"s\"}", "Box{value=String:\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertReads(type, "{\"value\":{\"a\":1}}", "Box{value=LinkedHashMap{a=Integer:1}}");
++    }
++
++    @Test
++    public void top_level_raw_box() {
++      Type type = Box.class;
++      assertReads(type, "{\"value\":1}", "Box{value=Integer:1}");
++      assertReads(type, "{\"value\":\"s\"}", "Box{value=String:\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertReads(type, "{\"value\":{\"a\":1}}", "Box{value=LinkedHashMap{a=Integer:1}}");
++    }
++  }
++
++  @SuppressWarnings("rawtypes")
++  public static class WildcardAndBoundedArguments {
++    @Test
++    public void box_of_wildcard_extending_number() {
++      Type type = new TypeRef<Box<? extends Number>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Box{value=Integer:1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertRejected(type, "{\"value\":[1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_number() {
++      Type type = new TypeRef<Box<Number>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Box{value=Integer:1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertRejected(type, "{\"value\":[1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void box_of_unbounded_wildcard() {
++      Type type = new TypeRef<Box<?>>() {}.type();
++      assertReads(type, "{\"value\":1}", "Box{value=Integer:1}");
++      assertReads(type, "{\"value\":\"s\"}", "Box{value=String:\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=ArrayList[Integer:1]}");
++      assertReads(type, "{\"value\":{\"a\":1}}", "Box{value=LinkedHashMap{a=Integer:1}}");
++    }
++  }
++
++  @SuppressWarnings("rawtypes")
++  public static class ArrayArguments {
++    @Test
++    public void box_of_long_array() {
++      Type type = new TypeRef<Box<Long[]>>() {}.type();
++      assertReads(type, "{\"value\":[1]}", "Box{value=Long[][Long:1]}");
++    }
++
++    @Test
++    public void box_of_primitive_long_array() {
++      Type type = new TypeRef<Box<long[]>>() {}.type();
++      assertReads(type, "{\"value\":[1]}", "Box{value=long[][Long:1]}");
++    }
++
++    @Test
++    public void box_of_object_array() {
++      Type type = new TypeRef<Box<Object[]>>() {}.type();
++      assertRejected(type, "{\"value\":1}");
++      assertRejected(type, "{\"value\":\"s\"}");
++      assertReads(type, "{\"value\":[1]}", "Box{value=Object[][Integer:1]}");
++      assertRejected(type, "{\"value\":{\"a\":1}}");
++    }
++
++    @Test
++    public void top_level_array_of_box_of_long() {
++      Type type = new TypeRef<Box<Long>[]>() {}.type();
++      assertRejected(type, "[{\"value\":1}]");
++    }
++  }
++
++  private static void assertReads(Type type, String json, String expected) {
++    Object actual = CONVERTER.fromData(jsonPayload(json), rawClass(type), type);
++    Assert.assertEquals(json + " as " + type, expected, describe(actual));
++  }
++
++  private static void assertRejected(Type type, String json) {
 +    Assert.assertThrows(
++        json + " as " + type,
 +        DataConverterException.class,
-+        () -> converter.fromData(jsonPayload(""), TestChunk.class, TestChunk.class));
++        () -> CONVERTER.fromData(jsonPayload(json), rawClass(type), type));
 +  }
 +
-+  @Test
-+  public void malformed_json_throws() {
-+    Assert.assertThrows(
-+        DataConverterException.class,
-+        () -> converter.fromData(jsonPayload("{not json"), TestChunk.class, TestChunk.class));
++  @SuppressWarnings("unchecked")
++  private static <T> Class<T> rawClass(Type type) {
++    if (type instanceof Class<?> clazz) return (Class<T>) clazz;
++    if (type instanceof ParameterizedType parameterized)
++      return rawClass(parameterized.getRawType());
++    if (type instanceof GenericArrayType array) {
++      return (Class<T>) Array.newInstance(rawClass(array.getGenericComponentType()), 0).getClass();
++    }
++    throw new IllegalArgumentException(type.toString());
 +  }
 +
-+  @Test
-+  public void round_trips() {
-+    TestChunk original = new TestChunk("c1", true, 1000);
-+    Payload p = converter.toData(original).get();
-+    Assert.assertEquals(original, converter.fromData(p, TestChunk.class, TestChunk.class));
++  /** Renders the runtime class and value at every level of {@code value}. */
++  private static String describe(Object value) {
++    if (value == null) return "null";
++    Class<?> clazz = value.getClass();
++    String name = clazz.getSimpleName();
++    if (value instanceof CharSequence) return name + ":\"" + value + "\"";
++    if (value instanceof Number || value instanceof Boolean || value instanceof Character) {
++      return name + ":" + value;
++    }
++    if (clazz.isArray()) {
++      List<String> items = new ArrayList<>();
++      for (int i = 0; i < Array.getLength(value); i++) items.add(describe(Array.get(value, i)));
++      return name + "[" + String.join(",", items) + "]";
++    }
++    if (value instanceof Optional<?> optional) {
++      return optional.isPresent() ? "Optional[" + describe(optional.get()) + "]" : "Optional.empty";
++    }
++    if (value instanceof Map<?, ?> map) {
++      List<String> entries = new ArrayList<>();
++      for (Map.Entry<?, ?> entry : map.entrySet()) {
++        Object key = entry.getKey();
++        entries.add(
++            (key instanceof String ? key : describe(key)) + "=" + describe(entry.getValue()));
++      }
++      return name + "{" + String.join(",", entries) + "}";
++    }
++    if (value instanceof Iterable<?> iterable) {
++      List<String> items = new ArrayList<>();
++      for (Object item : iterable) items.add(describe(item));
++      return name + "[" + String.join(",", items) + "]";
++    }
++    List<String> fields = new ArrayList<>();
++    try {
++      if (clazz.isRecord()) {
++        for (RecordComponent component : clazz.getRecordComponents()) {
++          fields.add(component.getName() + "=" + describe(component.getAccessor().invoke(value)));
++        }
++        return name + "{" + String.join(",", fields) + "}";
++      }
++      if (clazz.getEnclosingClass() == MicronautSerdePayloadConverterTest.class) {
++        for (Field field : clazz.getDeclaredFields()) {
++          if (!Modifier.isPublic(field.getModifiers()) || Modifier.isStatic(field.getModifiers())) {
++            continue;
++          }
++          fields.add(field.getName() + "=" + describe(field.get(value)));
++        }
++        return name + "{" + String.join(",", fields) + "}";
++      }
++    } catch (ReflectiveOperationException e) {
++      throw new AssertionError(e);
++    }
++    return clazz.getName() + ":" + value;
 +  }
 +
 +  private static Payload jsonPayload(String json) {
@@ -4023,10 +4651,10 @@ index 061b8f0..f662a3a 100644
      private String firstName;
      // we want ssn in a field here to test serialization of Optional<?> fields into json
 diff --git a/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java b/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java
-index c5068d8..796ac33 100644
+index 903e3df..09de772 100644
 --- a/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/functional/serialization/WorkflowIdSignedPayloadsTest.java
-@@ -54,7 +54,7 @@ public class WorkflowIdSignedPayloadsTest {
+@@ -55,7 +55,7 @@ public class WorkflowIdSignedPayloadsTest {
  
    private static final DataConverter codecDataConverter =
        new CodecDataConverter(
@@ -4224,6 +4852,78 @@ index 0000000..e67ea2a
 +    assertEquals(ByteString.copyFromUtf8(type), payload.getMetadataOrThrow("type"));
 +  }
 +}
+diff --git a/temporal-sdk/src/test/java/io/temporal/internal/common/converter/TemporalTransferTypeDataConverterTest.java b/temporal-sdk/src/test/java/io/temporal/internal/common/converter/TemporalTransferTypeDataConverterTest.java
+index de0251b..de2d3cd 100644
+--- a/temporal-sdk/src/test/java/io/temporal/internal/common/converter/TemporalTransferTypeDataConverterTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/internal/common/converter/TemporalTransferTypeDataConverterTest.java
+@@ -14,6 +14,9 @@ import static org.mockito.Mockito.when;
+ 
+ import com.google.common.reflect.TypeToken;
+ import com.google.protobuf.StringValue;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.ObjectMapper;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.api.common.v1.Payload;
+ import io.temporal.api.common.v1.Payloads;
+ import io.temporal.api.failure.v1.Failure;
+@@ -22,6 +25,7 @@ import io.temporal.common.converter.DataConverter;
+ import io.temporal.common.converter.DataConverterException;
+ import io.temporal.common.converter.DefaultDataConverter;
+ import io.temporal.common.converter.FailureConverter;
++import io.temporal.common.converter.MicronautSerdePayloadConverter;
+ import io.temporal.common.converter.PayloadConverter;
+ import io.temporal.common.converter.RawValue;
+ import io.temporal.common.converter.TransferTypeConverter;
+@@ -34,6 +38,7 @@ import java.lang.reflect.Type;
+ import java.util.Arrays;
+ import java.util.Collections;
+ import java.util.List;
++import java.util.Map;
+ import java.util.Optional;
+ import java.util.concurrent.atomic.AtomicInteger;
+ import org.junit.Before;
+@@ -58,7 +63,13 @@ public class TemporalTransferTypeDataConverterTest {
+ 
+   @Before
+   public void setUp() {
+-    DataConverter standard = DefaultDataConverter.newDefaultInstance();
++    // The fork's built-in JSON converter handles only JDK value types; application POJOs go
++    // through Micronaut Serde.
++    DataConverter standard =
++        DefaultDataConverter.newDefaultInstance()
++            .withPayloadConverterOverrides(
++                new MicronautSerdePayloadConverter(
++                    ObjectMapper.create(Map.of(), "io.temporal.common.converter")));
+     converter =
+         wrapped
+             ? TemporalTransferTypeDataConverter.wrap(
+@@ -559,6 +570,8 @@ public class TemporalTransferTypeDataConverterTest {
+     }
+   }
+ 
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+   public static class DerivedWithoutAnnotation extends Model {
+     public DerivedWithoutAnnotation(String value) {
+       super(value);
+@@ -890,6 +903,8 @@ public class TemporalTransferTypeDataConverterTest {
+     }
+   }
+ 
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+   public static final class OrdinaryContainer {
+     public NestedModel value;
+ 
+@@ -900,6 +915,8 @@ public class TemporalTransferTypeDataConverterTest {
+     }
+   }
+ 
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+   @TransferTypeConvertible(NestedModelConverter.class)
+   public static final class NestedModel {
+     public String value;
 diff --git a/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java b/temporal-sdk/src/test/java/io/temporal/internal/history/LocalActivityMarkerMetadataRoundTripTest.java
 new file mode 100644
 index 0000000..5bbb19e
@@ -4986,6 +5686,93 @@ index 0000000..c84a487
 +    }
 +  }
 +}
+diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/activityTests/LocalActivityCopyableTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/activityTests/LocalActivityCopyableTest.java
+index 008211d..4871e40 100644
+--- a/temporal-sdk/src/test/java/io/temporal/workflow/activityTests/LocalActivityCopyableTest.java
++++ b/temporal-sdk/src/test/java/io/temporal/workflow/activityTests/LocalActivityCopyableTest.java
+@@ -3,6 +3,9 @@ package io.temporal.workflow.activityTests;
+ import static org.junit.Assert.*;
+ 
+ import com.google.common.reflect.TypeToken;
++import io.micronaut.core.annotation.Introspected;
++import io.micronaut.serde.ObjectMapper;
++import io.micronaut.serde.annotation.Serdeable;
+ import io.temporal.activity.*;
+ import io.temporal.api.common.v1.Payload;
+ import io.temporal.api.enums.v1.EventType;
+@@ -74,7 +77,10 @@ public class LocalActivityCopyableTest {
+       assertEquals(0, (int) args.get(1, int.class));
+       assertEquals(original, args.get(0, PlainValue.class, PlainValue.class).value);
+       EncodedValues snapshot =
+-          new EncodedValues(args.toPayloads(), DefaultDataConverter.newDefaultInstance());
++          new EncodedValues(
++              args.toPayloads(),
++              DefaultDataConverter.newDefaultInstance()
++                  .withPayloadConverterOverrides(new CountingConverter()));
+       assertEquals(original, snapshot.get(0, MutableValue.class).value);
+       assertEquals(args.toPayloads(), snapshot.toPayloads());
+       assertEquals(1, args.getSize());
+@@ -187,6 +193,8 @@ public class LocalActivityCopyableTest {
+     }
+   }
+ 
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+   public static class MutableValue implements Copyable<MutableValue> {
+     public int value;
+     public String mode;
+@@ -204,11 +212,15 @@ public class LocalActivityCopyableTest {
+     }
+   }
+ 
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+   public static class PlainValue {
+     public int value;
+     public String mode;
+   }
+ 
++  @Serdeable
++  @Introspected(accessKind = {Introspected.AccessKind.FIELD, Introspected.AccessKind.METHOD})
+   public static class Box<T> implements Copyable<Box<T>> {
+     public T value;
+ 
+@@ -385,7 +397,16 @@ public class LocalActivityCopyableTest {
+     }
+   }
+ 
+-  private static class CountingConverter extends JacksonJsonPayloadConverter {
++  private static class CountingConverter implements PayloadConverter {
++    private final PayloadConverter delegate =
++        new MicronautSerdePayloadConverter(
++            ObjectMapper.create(Map.of(), "io.temporal.common.converter"));
++
++    @Override
++    public String getEncodingType() {
++      return delegate.getEncodingType();
++    }
++
+     final AtomicInteger writes = new AtomicInteger();
+     final AtomicInteger reads = new AtomicInteger();
+     final AtomicInteger plainReads = new AtomicInteger();
+@@ -395,7 +416,7 @@ public class LocalActivityCopyableTest {
+       if (value instanceof MutableValue) {
+         writes.incrementAndGet();
+       }
+-      return super.toData(value);
++      return delegate.toData(value);
+     }
+ 
+     @Override
+@@ -405,7 +426,7 @@ public class LocalActivityCopyableTest {
+       } else if (valueClass == PlainValue.class) {
+         plainReads.incrementAndGet();
+       }
+-      return super.fromData(content, valueClass, valueType);
++      return delegate.fromData(content, valueClass, valueType);
+     }
+   }
+ }
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/failure/FailureEncodingTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/failure/FailureEncodingTest.java
 index 16af81c..a0e1026 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/failure/FailureEncodingTest.java
@@ -5011,10 +5798,10 @@ index 16af81c..a0e1026 100644
      WorkflowClientOptions workflowClientOptions =
          WorkflowClientOptions.newBuilder()
 diff --git a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
-index 4fd89f0..894ed33 100644
+index 55badb8..52f01ad 100644
 --- a/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
 +++ b/temporal-sdk/src/test/java/io/temporal/workflow/nexus/OperationFailMetricTest.java
-@@ -603,7 +603,7 @@ public class OperationFailMetricTest {
+@@ -611,7 +611,7 @@ public class OperationFailMetricTest {
    }
  
    private void assertNoRetries(String testCase) {
@@ -5274,7 +6061,7 @@ index e50628b..522e117 100644
  
      public int ChainSequence;
 diff --git a/temporal-serviceclient/build.gradle b/temporal-serviceclient/build.gradle
-index 1da1e24..b462c8b 100644
+index b698e1d..42945f7 100644
 --- a/temporal-serviceclient/build.gradle
 +++ b/temporal-serviceclient/build.gradle
 @@ -1,5 +1,5 @@
@@ -5293,7 +6080,7 @@ index 1da1e24..b462c8b 100644
          // Solves: "Entry gogoproto/Gogo.java is a duplicate but no duplicate handling strategy has been set.
          // Please refer to https://docs.gradle.org/7.6/dsl/org.gradle.api.tasks.Copy.html#org.gradle.api.tasks.Copy:duplicatesStrategy for details."
          .setDuplicatesStrategy(DuplicatesStrategy.EXCLUDE)
-@@ -109,19 +109,18 @@ clean {
+@@ -122,10 +122,6 @@ clean {
      delete protobuf.generatedFilesBaseDir
  }
  
@@ -5301,6 +6088,13 @@ index 1da1e24..b462c8b 100644
 -    generatedFilesBaseDir = "$buildDir/generated"
 -}
 -
+ // --- Payload code generation ---
+ // Build-time generators, sharing one source set, emit into the main source set:
+ // - GeneratedPayloadVisitor.java, which knows how to walk every payload-bearing Temporal API
+@@ -184,15 +180,18 @@ tasks.named('compilePayloadGeneratorsJava') {
+     options.errorprone.error('MissingCasesInEnumSwitch')
+ }
+ 
 +// protobuf-gradle-plugin 0.10.0 (required for Gradle 9) makes generatedFilesBaseDir read-only; it is
 +// fixed at "$buildDir/generated/source/proto". The custom "$buildDir/generated" override is gone, so
 +// downstream references use the default location.
@@ -5319,7 +6113,7 @@ index 1da1e24..b462c8b 100644
      }
  }
  
-@@ -129,13 +128,14 @@ idea {
+@@ -200,13 +199,14 @@ idea {
  // Generation version.properties for value to be included into the request header
  task createProperties(dependsOn: processResources) {
      doLast {
@@ -5335,7 +6129,7 @@ index 1da1e24..b462c8b 100644
              p.store w, null
          }
      }
-@@ -151,3 +151,10 @@ task registerNamespace(type: JavaExec) {
+@@ -222,3 +222,10 @@ task registerNamespace(type: JavaExec) {
  }
  
  test.dependsOn 'registerNamespace'

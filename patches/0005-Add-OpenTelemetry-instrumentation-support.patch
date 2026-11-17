@@ -1,4 +1,4 @@
-From 4ec0e11b5c04d5412cc02527a93f6dee786f364d Mon Sep 17 00:00:00 2001
+From c3d31eb6693c97ff653930fde46f280bbaeb0aff Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Wed, 1 Jul 2026 17:25:34 -0400
 Subject: [PATCH] Add OpenTelemetry instrumentation support
@@ -90,10 +90,10 @@ Subject: [PATCH] Add OpenTelemetry instrumentation support
  create mode 100644 temporal-opentelemetry-tracing/src/test/java/io/temporal/opentelemetry/worker/WorkflowEvictionTest.java
 
 diff --git a/settings.gradle b/settings.gradle
-index 7fc01ab..6d68110 100644
+index 31b5bb2..0175c87 100644
 --- a/settings.gradle
 +++ b/settings.gradle
-@@ -4,12 +4,14 @@ include 'temporal-serviceclient'
+@@ -16,12 +16,14 @@ include 'temporal-serviceclient'
  include 'temporal-sdk'
  include 'temporal-testing'
  include 'temporal-test-server'
@@ -108,7 +108,7 @@ index 7fc01ab..6d68110 100644
 +include 'temporal-opentelemetry-tracing'
  // Excluded: uses Jackson's KotlinObjectMapperFactory, not needed by PKWARE consumers
  // include 'temporal-kotlin'
- // include 'temporal-spring-ai'
+ // Retained for the one-time relocation POM; implementation lives in ai-integrations.
 diff --git a/temporal-opentelemetry-tracing/build.gradle b/temporal-opentelemetry-tracing/build.gradle
 new file mode 100644
 index 0000000..4c1e270
