@@ -1,4 +1,4 @@
-From b013d67534fed5602c094329b57b6ebda3476dd0 Mon Sep 17 00:00:00 2001
+From 3f373bd12222072fdb90f3872e403465d6e47c0a Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 21 May 2026 14:53:54 -0400
 Subject: [PATCH] Change groupId to com.pkware.temporal
@@ -9,10 +9,10 @@ Publish under PKWARE's Maven Central namespace.
  1 file changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/gradle/versioning.gradle b/gradle/versioning.gradle
-index 7cdddff..e950041 100644
+index ea1a6c7..19fe214 100644
 --- a/gradle/versioning.gradle
 +++ b/gradle/versioning.gradle
-@@ -51,10 +51,10 @@ ext.getClientVersionName = { ->
+@@ -63,10 +63,10 @@ ext.getClientVersionName = { ->
      return split[0]
  }
  

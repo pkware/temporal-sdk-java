@@ -1,4 +1,4 @@
-From a419313a36d58f434a2d7ef4ef67e0c86466cb66 Mon Sep 17 00:00:00 2001
+From c942a2887d9cc43c1624cfa12f0459c16de48283 Mon Sep 17 00:00:00 2001
 From: Marius Volkhart <marius.volkhart@pkware.com>
 Date: Thu, 25 Jun 2026 12:18:14 -0400
 Subject: [PATCH] Replace grpc-netty-shaded with grpc-netty
@@ -70,7 +70,7 @@ index 1474281..3591810 100644
  import io.grpc.stub.ServerCalls;
  import io.grpc.stub.StreamObserver;
 diff --git a/temporal-serviceclient/build.gradle b/temporal-serviceclient/build.gradle
-index e4b6976..215cbf2 100644
+index b462c8b..30babfe 100644
 --- a/temporal-serviceclient/build.gradle
 +++ b/temporal-serviceclient/build.gradle
 @@ -11,7 +11,7 @@ dependencies {
